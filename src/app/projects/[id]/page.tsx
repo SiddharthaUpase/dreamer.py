@@ -1,15 +1,18 @@
 "use client";
 
+import { use } from "react";
 import { ThemeProvider } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import lightTheme from "@/theme-light";
-import Dashboard from "@/components/dashboard/Dashboard";
+import ProjectIDE from "@/components/project/ProjectIDE";
 
-export default function Home() {
+export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+
   return (
     <ThemeProvider theme={lightTheme}>
       <CssBaseline />
-      <Dashboard />
+      <ProjectIDE projectId={id} />
     </ThemeProvider>
   );
 }
