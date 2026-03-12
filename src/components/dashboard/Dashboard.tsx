@@ -2,19 +2,35 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Button from "@mui/material/Button";
 import Grid from "@mui/material/Grid";
+import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
+import Avatar from "@mui/material/Avatar";
 import AddIcon from "@mui/icons-material/Add";
+import LogoutIcon from "@mui/icons-material/Logout";
+import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import ProjectCard from "./ProjectCard";
 import NewProjectDialog from "./NewProjectDialog";
 
 interface Project {
   id: string;
   name: string;
-  createdAt: string;
-  previewUrl: string | null;
+  created_at: string;
+  preview_url: string | null;
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const supabase = createClient();
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
 }
 
 function timeAgo(iso: string): string {
@@ -27,121 +43,237 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+const SIDEBAR_WIDTH = 240;
+
 export default function Dashboard() {
   const router = useRouter();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:3001/api/projects")
-      .then((r) => r.json())
-      .then((data) => setProjects(data.projects || []))
-      .catch(() => {});
+    async function load() {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.email) setUserEmail(user.email);
+
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch("http://localhost:3001/api/projects", { headers });
+        const data = await res.json();
+        setProjects(data.projects || []);
+      } catch { /* ignore */ }
+    }
+    load();
   }, []);
+
+  async function handleDelete(id: string) {
+    try {
+      const headers = await getAuthHeaders();
+      await fetch(`http://localhost:3001/api/projects/${id}`, {
+        method: "DELETE",
+        headers,
+      });
+      setProjects((prev) => prev.filter((p) => p.id !== id));
+    } catch { /* ignore */ }
+  }
 
   async function handleCreate(name: string, template: string) {
     const id = `proj_${Date.now()}`;
+    const headers = await getAuthHeaders();
     await fetch("http://localhost:3001/api/projects", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ id, name, template }),
     });
     router.push(`/projects/${id}`);
   }
 
+  async function handleLogout() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
+
+  const initials = userEmail ? userEmail.charAt(0).toUpperCase() : "?";
+
   return (
-    <Box
-      sx={{
-        minHeight: "100vh",
-        bgcolor: "background.default",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      {/* Navbar */}
+    <Box sx={{ minHeight: "100vh", display: "flex", bgcolor: "background.default" }}>
+      {/* Sidebar */}
       <Box
         sx={{
-          height: 56,
-          px: 4,
-          borderBottom: "1px solid",
+          width: SIDEBAR_WIDTH,
+          flexShrink: 0,
+          borderRight: "1px solid",
           borderColor: "divider",
           bgcolor: "background.paper",
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
+          flexDirection: "column",
         }}
       >
-        <Typography
-          variant="subtitle1"
-          fontWeight={600}
-          sx={{ color: "text.primary", letterSpacing: "-0.01em" }}
+        {/* Logo */}
+        <Box sx={{ height: 56, px: 2.5, display: "flex", alignItems: "center", gap: 1.5 }}>
+          <Box
+            sx={{
+              width: 28,
+              height: 28,
+              borderRadius: 1.5,
+              background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Typography sx={{ color: "#fff", fontWeight: 800, fontSize: "0.75rem" }}>A</Typography>
+          </Box>
+          <Typography variant="subtitle1" fontWeight={700} sx={{ color: "text.primary", letterSpacing: "-0.02em" }}>
+            agent-vas
+          </Typography>
+        </Box>
+
+        {/* Nav items */}
+        <Box sx={{ flex: 1, py: 1, px: 1.5 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1.5,
+              px: 1.5,
+              py: 1,
+              borderRadius: 2,
+              bgcolor: "rgba(167, 139, 250, 0.1)",
+              color: "primary.main",
+              cursor: "pointer",
+            }}
+          >
+            <FolderOpenIcon sx={{ fontSize: 18 }} />
+            <Typography variant="body2" fontWeight={600} sx={{ fontSize: "0.84rem" }}>
+              Projects
+            </Typography>
+          </Box>
+        </Box>
+
+        {/* User section */}
+        <Box
+          sx={{
+            px: 1.5,
+            py: 2,
+            borderTop: "1px solid",
+            borderColor: "divider",
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+          }}
         >
-          agent-vas
-        </Typography>
-        <Button
-          variant="contained"
-          disableElevation
-          size="small"
-          startIcon={<AddIcon />}
-          onClick={() => setDialogOpen(true)}
-          sx={{ borderRadius: 2, px: 2 }}
-        >
-          New Project
-        </Button>
+          <Avatar
+            sx={{
+              width: 32,
+              height: 32,
+              bgcolor: "primary.dark",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+            }}
+          >
+            {initials}
+          </Avatar>
+          <Box sx={{ minWidth: 0, flex: 1 }}>
+            <Typography
+              variant="caption"
+              noWrap
+              sx={{
+                color: "text.secondary",
+                fontSize: "0.75rem",
+                display: "block",
+              }}
+            >
+              {userEmail || "Loading..."}
+            </Typography>
+          </Box>
+          <Tooltip title="Sign out">
+            <IconButton
+              size="small"
+              onClick={handleLogout}
+              sx={{ color: "text.secondary", "&:hover": { color: "error.main" } }}
+            >
+              <LogoutIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Box>
 
-      {/* Content */}
-      <Box sx={{ flex: 1, px: 5, py: 5, maxWidth: 1200, mx: "auto", width: "100%" }}>
-        <Typography
-          variant="h6"
-          fontWeight={600}
-          sx={{ mb: 3, color: "text.primary" }}
+      {/* Main content */}
+      <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto" }}>
+        {/* Top bar */}
+        <Box
+          sx={{
+            height: 56,
+            px: 4,
+            borderBottom: "1px solid",
+            borderColor: "divider",
+            bgcolor: "background.paper",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
         >
-          My Projects
-        </Typography>
+          <Typography variant="h6" fontWeight={600} sx={{ color: "text.primary", fontSize: "1rem" }}>
+            My Projects
+          </Typography>
+          <Button
+            variant="contained"
+            disableElevation
+            size="small"
+            startIcon={<AddIcon />}
+            onClick={() => setDialogOpen(true)}
+            sx={{ borderRadius: 2, px: 2.5, textTransform: "none", fontWeight: 600 }}
+          >
+            New Project
+          </Button>
+        </Box>
 
-        <Grid container spacing={2.5}>
-          {/* New project card */}
-          <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
+        {/* Project grid */}
+        <Box sx={{ flex: 1, px: 4, py: 3.5 }}>
+          {projects.length === 0 ? (
             <Box
-              onClick={() => setDialogOpen(true)}
               sx={{
-                height: 200,
-                border: "1.5px dashed",
-                borderColor: "divider",
-                borderRadius: 3,
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: 1,
-                cursor: "pointer",
+                py: 12,
                 color: "text.secondary",
-                transition: "all 0.15s",
-                "&:hover": {
-                  borderColor: "primary.main",
-                  color: "primary.main",
-                  bgcolor: "rgba(99,102,241,0.03)",
-                },
               }}
             >
-              <AddIcon sx={{ fontSize: 28 }} />
-              <Typography variant="body2" fontWeight={500}>
-                New Project
+              <FolderOpenIcon sx={{ fontSize: 48, mb: 2, opacity: 0.4 }} />
+              <Typography variant="body1" fontWeight={500} sx={{ mb: 1 }}>
+                No projects yet
               </Typography>
+              <Typography variant="body2" sx={{ mb: 3, opacity: 0.7 }}>
+                Create your first project to get started
+              </Typography>
+              <Button
+                variant="outlined"
+                startIcon={<AddIcon />}
+                onClick={() => setDialogOpen(true)}
+                sx={{ borderRadius: 2, textTransform: "none" }}
+              >
+                New Project
+              </Button>
             </Box>
-          </Grid>
-
-          {/* Project cards */}
-          {projects.map((project) => (
-            <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={project.id}>
-              <ProjectCard
-                project={{ ...project, lastEdited: timeAgo(project.createdAt) }}
-                onClick={() => router.push(`/projects/${project.id}`)}
-              />
+          ) : (
+            <Grid container spacing={2.5} sx={{ maxWidth: 1200 }}>
+              {projects.map((project) => (
+                <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={project.id}>
+                  <ProjectCard
+                    project={{ ...project, lastEdited: timeAgo(project.created_at) }}
+                    onClick={() => router.push(`/projects/${project.id}`)}
+                    onDelete={handleDelete}
+                  />
+                </Grid>
+              ))}
             </Grid>
-          ))}
-        </Grid>
+          )}
+        </Box>
       </Box>
 
       <NewProjectDialog

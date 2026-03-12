@@ -1,13 +1,13 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import type { Sandbox } from "@daytonaio/sdk";
+import type { SandboxInstance } from "@blaxel/core";
 
-export function createTools(sandbox: Sandbox) {
+export function createTools(sandbox: SandboxInstance) {
   const exec = async (command: string): Promise<string> => {
-    const result = await sandbox.process.executeCommand(command);
+    const result = await sandbox.process.exec({ command, waitForCompletion: true });
     return result.exitCode !== 0
-      ? `Error (exit ${result.exitCode}): ${result.result}`
-      : result.result || "";
+      ? `Error (exit ${result.exitCode}): ${result.stderr || result.stdout || ""}`
+      : result.stdout || "";
   };
 
   const bash = tool(
@@ -15,14 +15,14 @@ export function createTools(sandbox: Sandbox) {
       const timeoutMs = (timeout || 60) * 1000;
       try {
         const result = await Promise.race([
-          sandbox.process.executeCommand(command),
+          sandbox.process.exec({ command, waitForCompletion: true }),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error(`Timed out after ${timeout || 60}s`)), timeoutMs)
           ),
         ]);
         return result.exitCode !== 0
-          ? `Error (exit ${result.exitCode}): ${result.result}`
-          : result.result || "";
+          ? `Error (exit ${result.exitCode}): ${result.stderr || result.stdout || ""}`
+          : result.stdout || "";
       } catch (error: any) {
         return `Error: ${error.message}`;
       }
@@ -79,11 +79,11 @@ export function createTools(sandbox: Sandbox) {
         JSON.stringify({ path, content })
       ).toString("base64");
       const script =
-        `python3 -c "import json,base64,os;` +
-        `a=json.loads(base64.b64decode('${b64}').decode());` +
-        `os.makedirs(os.path.dirname(a['path']),exist_ok=True);` +
-        `open(a['path'],'w').write(a['content']);` +
-        `print('Successfully wrote to '+a['path']+' ('+str(len(a['content']))+' chars)')"`;
+        `node -e "const a=JSON.parse(Buffer.from('${b64}','base64').toString());` +
+        `const p=require('path');const fs=require('fs');` +
+        `fs.mkdirSync(p.dirname(a.path),{recursive:true});` +
+        `fs.writeFileSync(a.path,a.content);` +
+        `console.log('Successfully wrote to '+a.path+' ('+a.content.length+' chars)')"`;
       return await exec(script);
     },
     {
@@ -107,12 +107,12 @@ export function createTools(sandbox: Sandbox) {
         JSON.stringify({ path, oldStr: old_string, newStr: new_string })
       ).toString("base64");
       const script =
-        `python3 -c "import json,base64,sys;` +
-        `args=json.loads(base64.b64decode('${argsB64}').decode());` +
-        `c=open(args['path']).read();` +
-        `sys.exit('Error: Could not find the specified text') if args['oldStr'] not in c else None;` +
-        `open(args['path'],'w').write(c.replace(args['oldStr'],args['newStr'],1));` +
-        `print('File edited successfully')"`;
+        `node -e "const a=JSON.parse(Buffer.from('${argsB64}','base64').toString());` +
+        `const fs=require('fs');` +
+        `const c=fs.readFileSync(a.path,'utf8');` +
+        `if(!c.includes(a.oldStr)){console.error('Error: Could not find the specified text');process.exit(1)}` +
+        `fs.writeFileSync(a.path,c.replace(a.oldStr,a.newStr));` +
+        `console.log('File edited successfully')"`;
       return await exec(script);
     },
     {
@@ -178,13 +178,14 @@ export function createTools(sandbox: Sandbox) {
   );
 
   const preview_url = tool(
-    async ({ port, expiresIn }) => {
-      const expiration = expiresIn || 3600;
+    async ({ port }) => {
       try {
-        const result = await sandbox.getSignedPreviewUrl(port, expiration);
-        const rawUrl = typeof result === "string" ? result : (result as any).url || JSON.stringify(result);
-        const url = rawUrl.replace("https://", "http://");
-        return `Public URL for port ${port}: ${url}\n(Open this URL in a browser — expires in ${expiration} seconds)\nNote: The server must bind to 0.0.0.0, not localhost/127.0.0.1.`;
+        const preview = await sandbox.previews.createIfNotExists({
+          metadata: { name: `preview-${port}` },
+          spec: { port, public: true },
+        });
+        const url = preview.spec?.url || "";
+        return `Public URL for port ${port}: ${url}\nNote: The server must bind to 0.0.0.0, not localhost/127.0.0.1.`;
       } catch (error: any) {
         return `Error getting preview URL: ${error.message}`;
       }
@@ -195,54 +196,56 @@ export function createTools(sandbox: Sandbox) {
         "Get a public URL for a service running on a specific port in the sandbox. The service must bind to 0.0.0.0 (not localhost). Useful for previewing web apps, APIs, etc.",
       schema: z.object({
         port: z.number().describe("The port number the service is running on"),
-        expiresIn: z.number().optional().describe("How long the URL is valid in seconds (default: 3600)"),
       }),
     }
   );
 
   const start_server = tool(
     async ({ command, readyPattern, timeout, sessionName }) => {
-      const sid = sessionName || `server-${Date.now()}`;
+      const name = sessionName || `server-${Date.now()}`;
       const maxWait = (timeout || 60) * 1000;
       const pattern = new RegExp(readyPattern || "ready|listening|started|running on", "i");
 
       try {
-        // Create session and start command async
-        await sandbox.process.createSession(sid);
-        const startResult = await sandbox.process.executeSessionCommand(sid, {
+        // Extract port from command if possible (for waitForPorts)
+        const portMatch = command.match(/--port\s+(\d+)|-p\s+(\d+)/);
+        const port = portMatch ? parseInt(portMatch[1] || portMatch[2]) : undefined;
+
+        // Start process with waitForPorts if we can detect the port
+        await sandbox.process.exec({
+          name,
           command,
-          runAsync: true,
+          waitForPorts: port ? [port] : undefined,
+          restartOnFailure: true,
+          maxRestarts: 10,
         });
-        const cmdId = startResult.cmdId;
-        if (!cmdId) return "Error: failed to get command ID";
 
-        // Poll logs until ready pattern or timeout
+        // Poll for readiness
         const startTime = Date.now();
-        let lastStdout = "";
-        let lastStderr = "";
-
         while (Date.now() - startTime < maxWait) {
           await new Promise((r) => setTimeout(r, 2000));
 
-          const logs = await sandbox.process.getSessionCommandLogs(sid, cmdId);
-          lastStdout = logs.stdout || "";
-          lastStderr = logs.stderr || "";
-          const combined = lastStdout + lastStderr;
+          try {
+            const info = await sandbox.process.get(name);
+            const stdout = info.stdout || "";
+            const stderr = info.stderr || "";
+            const combined = stdout + stderr;
 
-          // Check if process exited (crashed)
-          const cmdInfo = await sandbox.process.getSessionCommand(sid, cmdId);
-          if (cmdInfo.exitCode !== undefined && cmdInfo.exitCode !== null) {
-            return `Server exited with code ${cmdInfo.exitCode}.\n\nSTDOUT:\n${lastStdout.slice(-1000)}\n\nSTDERR:\n${lastStderr.slice(-1000)}`;
-          }
+            // Check if process exited (crashed)
+            if (info.status === "completed" || info.status === "failed") {
+              return `Server exited (${info.status}, code ${info.exitCode}).\n\nSTDOUT:\n${stdout.slice(-1000)}\n\nSTDERR:\n${stderr.slice(-1000)}`;
+            }
 
-          // Check if ready
-          if (pattern.test(combined)) {
-            return `Server is ready! (session: ${sid})\n\nLogs:\n${combined.slice(-1000)}\n\nTip: Use preview_url tool to get a public URL for the running port.`;
+            // Check if ready
+            if (pattern.test(combined)) {
+              return `Server is ready! (process: ${name})\n\nLogs:\n${combined.slice(-1000)}\n\nTip: Use preview_url tool to get a public URL for the running port.`;
+            }
+          } catch {
+            // Process info not available yet
           }
         }
 
-        // Timeout — return whatever logs we have
-        return `Timed out after ${timeout || 60}s waiting for server. It may still be starting.\nSession: ${sid}\n\nSTDOUT:\n${lastStdout.slice(-1000)}\n\nSTDERR:\n${lastStderr.slice(-1000)}\n\nUse check_server tool to check again later.`;
+        return `Timed out after ${timeout || 60}s waiting for server. It may still be starting.\nProcess: ${name}\n\nUse check_server tool to check again later.`;
       } catch (error: any) {
         return `Error starting server: ${error.message}`;
       }
@@ -255,10 +258,10 @@ export function createTools(sandbox: Sandbox) {
         "IMPORTANT: The server MUST bind to 0.0.0.0 (not localhost) for preview URLs to work. " +
         "For Next.js: 'npm run dev -- -H 0.0.0.0'. For Express: app.listen(port, '0.0.0.0').",
       schema: z.object({
-        command: z.string().describe("The command to start the server (e.g. 'cd /home/daytona/myapp && npm run dev -- -H 0.0.0.0')"),
+        command: z.string().describe("The command to start the server (e.g. 'cd /blaxel/app && npm run dev -- -H 0.0.0.0')"),
         readyPattern: z.string().optional().describe("Regex pattern to detect when server is ready (default: 'ready|listening|started|running on')"),
         timeout: z.number().optional().describe("Max seconds to wait for server to be ready (default: 60)"),
-        sessionName: z.string().optional().describe("Unique name for this server session (default: auto-generated)"),
+        sessionName: z.string().optional().describe("Unique name for this server process (default: auto-generated)"),
       }),
     }
   );
@@ -266,18 +269,12 @@ export function createTools(sandbox: Sandbox) {
   const check_server = tool(
     async ({ sessionName }) => {
       try {
-        const session = await sandbox.process.getSession(sessionName);
-        if (!session.commands || session.commands.length === 0) {
-          return `Session '${sessionName}' has no commands.`;
-        }
+        const info = await sandbox.process.get(sessionName);
+        const status = info.status || "unknown";
+        const stdout = info.stdout || "";
+        const stderr = info.stderr || "";
 
-        const cmd = session.commands[session.commands.length - 1];
-        const logs = await sandbox.process.getSessionCommandLogs(sessionName, cmd.id!);
-        const status = cmd.exitCode !== undefined && cmd.exitCode !== null
-          ? `exited (code ${cmd.exitCode})`
-          : "running";
-
-        return `Server status: ${status}\nCommand: ${cmd.command}\n\nSTDOUT (last 1000 chars):\n${(logs.stdout || "").slice(-1000)}\n\nSTDERR (last 1000 chars):\n${(logs.stderr || "").slice(-1000)}`;
+        return `Server status: ${status}\nCommand: ${info.command}\n\nSTDOUT (last 1000 chars):\n${stdout.slice(-1000)}\n\nSTDERR (last 1000 chars):\n${stderr.slice(-1000)}`;
       } catch (error: any) {
         return `Error checking server: ${error.message}`;
       }
@@ -286,7 +283,7 @@ export function createTools(sandbox: Sandbox) {
       name: "check_server",
       description: "Check the status and logs of a running background server started with start_server.",
       schema: z.object({
-        sessionName: z.string().describe("The session name used when starting the server"),
+        sessionName: z.string().describe("The process name used when starting the server"),
       }),
     }
   );
@@ -294,17 +291,17 @@ export function createTools(sandbox: Sandbox) {
   const stop_server = tool(
     async ({ sessionName }) => {
       try {
-        await sandbox.process.deleteSession(sessionName);
-        return `Server session '${sessionName}' stopped and deleted.`;
+        await sandbox.process.kill(sessionName);
+        return `Server process '${sessionName}' stopped.`;
       } catch (error: any) {
         return `Error stopping server: ${error.message}`;
       }
     },
     {
       name: "stop_server",
-      description: "Stop a background server by deleting its session.",
+      description: "Stop a background server by killing its process.",
       schema: z.object({
-        sessionName: z.string().describe("The session name to stop"),
+        sessionName: z.string().describe("The process name to stop"),
       }),
     }
   );

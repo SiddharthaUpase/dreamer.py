@@ -15,7 +15,6 @@ import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import UnfoldLessIcon from "@mui/icons-material/UnfoldLess";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
-import CircleIcon from "@mui/icons-material/Circle";
 import SmartphoneIcon from "@mui/icons-material/Smartphone";
 import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import Select from "@mui/material/Select";
@@ -26,6 +25,8 @@ import EditNoteIcon from "@mui/icons-material/EditNote";
 import SearchIcon from "@mui/icons-material/Search";
 import BuildIcon from "@mui/icons-material/Build";
 import LanguageIcon from "@mui/icons-material/Language";
+import CompressIcon from "@mui/icons-material/Compress";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { useRouter } from "next/navigation";
 import { useProject, MODEL_OPTIONS } from "@/hooks/useProject";
 import type { ToolActivity } from "@/hooks/useProject";
@@ -69,13 +70,19 @@ export default function ProjectIDE({ projectId }: Props) {
     toolActivities,
     previewUrl,
     iframeKey,
+    setIframeKey,
     sandboxStatus,
     sandboxError,
     selectedModel,
     setSelectedModel,
+    contextInfo,
+    compacting,
     messagesEndRef,
     handleSend,
     handleAbort,
+    handleClose,
+    handleClearChat,
+    handleCompact,
   } = useProject(projectId);
 
   // Show final response as a toast for 3s in direct mode
@@ -116,7 +123,7 @@ export default function ProjectIDE({ projectId }: Props) {
         }}
       >
         <Tooltip title="Back to projects">
-          <IconButton size="small" onClick={() => router.push("/")} sx={{ color: "text.secondary" }}>
+          <IconButton size="small" onClick={() => { handleClose(); router.push("/"); }} sx={{ color: "text.secondary" }}>
             <ArrowBackIcon fontSize="small" />
           </IconButton>
         </Tooltip>
@@ -125,30 +132,10 @@ export default function ProjectIDE({ projectId }: Props) {
           {projectName ?? "Loading..."}
         </Typography>
 
-        {/* Model selector */}
-        <Select
-          size="small"
-          value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
-          disabled={loading}
-          sx={{
-            fontSize: "0.75rem",
-            height: 28,
-            "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" },
-            "& .MuiSelect-select": { py: 0, px: 1.25 },
-          }}
-        >
-          {MODEL_OPTIONS.map((m) => (
-            <MenuItem key={m.id} value={m.id} sx={{ fontSize: "0.8rem" }}>
-              {m.label}
-            </MenuItem>
-          ))}
-        </Select>
-
         <Tooltip title="Refresh preview">
           <IconButton
             size="small"
-            onClick={() => iframeRef.current?.contentWindow?.location.reload()}
+            onClick={() => setIframeKey((k: number) => k + 1)}
             sx={{ color: "text.secondary" }}
           >
             <RefreshIcon fontSize="small" />
@@ -251,6 +238,15 @@ export default function ProjectIDE({ projectId }: Props) {
                 onSend={handleSend}
                 onAbort={handleAbort}
                 loading={loading}
+              />
+              <ContextModelBar
+                contextInfo={contextInfo}
+                compacting={compacting}
+                loading={loading}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
+                onCompact={handleCompact}
+                onClear={handleClearChat}
               />
             </Box>
           </>
@@ -369,7 +365,7 @@ export default function ProjectIDE({ projectId }: Props) {
                 </Box>
               )}
             </Box>
-            <Box sx={{ bgcolor: "background.paper", borderTop: "1px solid", borderColor: "divider", display: "flex", justifyContent: "center" }}>
+            <Box sx={{ bgcolor: "background.paper", borderTop: "1px solid", borderColor: "divider", display: "flex", flexDirection: "column", alignItems: "center" }}>
               <Box sx={{ width: "40%" }}>
                 <ChatInputBar
                   input={input}
@@ -378,31 +374,21 @@ export default function ProjectIDE({ projectId }: Props) {
                   onAbort={handleAbort}
                   loading={loading}
                 />
+                <ContextModelBar
+                  contextInfo={contextInfo}
+                  compacting={compacting}
+                  loading={loading}
+                  selectedModel={selectedModel}
+                  setSelectedModel={setSelectedModel}
+                  onCompact={handleCompact}
+                  onClear={handleClearChat}
+                />
               </Box>
             </Box>
           </Box>
         )}
       </Box>
 
-      {/* Status bar */}
-      <Box
-        sx={{
-          height: 28,
-          px: 3,
-          borderTop: "1px solid",
-          borderColor: "divider",
-          bgcolor: "background.paper",
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-          flexShrink: 0,
-        }}
-      >
-        <CircleIcon sx={{ fontSize: 8, color: "#22C55E" }} />
-        <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.7rem" }}>
-          sandbox ready{previewUrl ? ` · ${previewUrl}` : " · no preview yet"}
-        </Typography>
-      </Box>
     </Box>
   );
 }
@@ -766,6 +752,92 @@ function ChatInputBar({
           },
         }}
       />
+    </Box>
+  );
+}
+
+function ContextModelBar({
+  contextInfo,
+  compacting,
+  loading,
+  selectedModel,
+  setSelectedModel,
+  onCompact,
+  onClear,
+}: {
+  contextInfo: { tokens: number; limit: number } | null;
+  compacting: boolean;
+  loading: boolean;
+  selectedModel: string;
+  setSelectedModel: (v: string) => void;
+  onCompact: () => void;
+  onClear: () => void;
+}) {
+  const ratio = contextInfo ? contextInfo.tokens / contextInfo.limit : 0;
+  return (
+    <Box sx={{ px: 3, pb: 1.5, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        {contextInfo && (
+          <>
+            <Box sx={{ width: 60, height: 4, bgcolor: "rgba(0,0,0,0.08)", borderRadius: 2, overflow: "hidden" }}>
+              <Box
+                sx={{
+                  width: `${Math.min(ratio * 100, 100)}%`,
+                  height: "100%",
+                  borderRadius: 2,
+                  bgcolor: ratio > 0.8 ? "#EF4444" : ratio > 0.5 ? "#F59E0B" : "#22C55E",
+                  transition: "width 0.3s ease",
+                }}
+              />
+            </Box>
+            <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.65rem" }}>
+              {Math.round(contextInfo.tokens / 1000)}k / {Math.round(contextInfo.limit / 1000)}k tokens
+            </Typography>
+          </>
+        )}
+        <Tooltip title="Compact context">
+          <IconButton
+            size="small"
+            onClick={onCompact}
+            disabled={loading || compacting}
+            sx={{ width: 20, height: 20, color: "text.secondary" }}
+          >
+            {compacting ? (
+              <CircularProgress size={10} thickness={5} />
+            ) : (
+              <CompressIcon sx={{ fontSize: 13 }} />
+            )}
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Clear chat">
+          <IconButton
+            size="small"
+            onClick={onClear}
+            disabled={loading || compacting}
+            sx={{ width: 20, height: 20, color: "text.secondary" }}
+          >
+            <DeleteOutlineIcon sx={{ fontSize: 13 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+      <Select
+        size="small"
+        value={selectedModel}
+        onChange={(e) => setSelectedModel(e.target.value)}
+        disabled={loading}
+        sx={{
+          fontSize: "0.7rem",
+          height: 24,
+          "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" },
+          "& .MuiSelect-select": { py: 0, px: 1 },
+        }}
+      >
+        {MODEL_OPTIONS.map((m) => (
+          <MenuItem key={m.id} value={m.id} sx={{ fontSize: "0.75rem" }}>
+            {m.label}
+          </MenuItem>
+        ))}
+      </Select>
     </Box>
   );
 }

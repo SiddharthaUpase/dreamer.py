@@ -8,32 +8,64 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import type { Sandbox } from "@daytonaio/sdk";
+import type { SandboxInstance } from "@blaxel/core";
 import { createTools } from "./tools.js";
+import {
+  getProjectMessages,
+  saveMessages,
+  deleteProjectMessages,
+  type StoredMessage,
+} from "../services/projectStore.js";
+
+// Injects cache_control into the request body for Anthropic prompt caching via OpenRouter.
+// LangChain's ChatOpenAI uses the openai SDK which rejects unknown top-level params,
+// so we inject it at the HTTP layer before the request is sent.
+function createCachingFetch(): typeof globalThis.fetch {
+  return async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.body && typeof init.body === "string") {
+      try {
+        const body = JSON.parse(init.body);
+        body.cache_control = { type: "ephemeral" };
+        init = { ...init, body: JSON.stringify(body) };
+      } catch { /* not JSON, pass through */ }
+    }
+    return globalThis.fetch(input, init);
+  };
+}
+
+const openRouterBase = {
+  baseURL: "https://openrouter.ai/api/v1",
+  defaultHeaders: {
+    "HTTP-Referer": "https://agent-vas.dev",
+    "X-OpenRouter-Title": "Agent VAS",
+  },
+};
 
 const openRouterConfig = {
   model: "",
   temperature: 0.8,
   streaming: true,
   apiKey: process.env.OPEN_ROUTER,
+  configuration: openRouterBase,
+};
+
+const anthropicConfig = {
+  ...openRouterConfig,
   configuration: {
-    baseURL: "https://openrouter.ai/api/v1",
-    defaultHeaders: {
-      "HTTP-Referer": "https://agent-vas.dev",
-      "X-OpenRouter-Title": "Agent VAS",
-    },
+    ...openRouterBase,
+    fetch: createCachingFetch(),
   },
 };
 
 const AVAILABLE_MODELS: Record<string, () => BaseChatModel> = {
   "claude-sonnet": () =>
     new ChatOpenAI({
-      ...openRouterConfig,
+      ...anthropicConfig,
       model: "anthropic/claude-sonnet-4.6",
     }),
   "claude-haiku": () =>
     new ChatOpenAI({
-      ...openRouterConfig,
+      ...anthropicConfig,
       model: "anthropic/claude-haiku-4.5",
     }),
   "minimax": () =>
@@ -52,7 +84,7 @@ export const MODEL_LIST = Object.keys(AVAILABLE_MODELS);
 
 const SYSTEM_PROMPT = `You are an expert coding agent with access to a sandboxed cloud environment. You help users with software engineering tasks including solving bugs, building features, refactoring code, and running applications.
 
-The working directory is /home/daytona. Always use absolute paths.
+The working directory is /app. Always use absolute paths. The project files live in /app.
 
 # Tone and Style
 - Be concise and direct. Minimize output — get to the point quickly.
@@ -90,7 +122,7 @@ IMPORTANT rules:
 For running servers or long-running processes:
 - Use the start_server tool instead of bash. It runs the command in the background and waits until the server is ready.
 - Servers MUST bind to 0.0.0.0 (not localhost/127.0.0.1) for preview URLs to work.
-- For Next.js: npm run dev -- -H 0.0.0.0
+- For Next.js: npm run dev -- --port 3000
 - For Express/Node: app.listen(port, '0.0.0.0')
 - For Python: use --host 0.0.0.0
 - After the server is ready, use preview_url to get a public URL the user can open in their browser.
@@ -103,14 +135,17 @@ For running servers or long-running processes:
 - Keep changes minimal and focused. Do not refactor unrelated code.
 - Use proper error handling at system boundaries.
 
-# File Delivery — /home/daytona/outputs
-When the user asks you to produce, generate, export, or "give" them a file (code, HTML, images, configs, etc.), **copy** the file to \`/home/daytona/outputs/\` so it can be delivered to the user's browser for download.
+# File Delivery — /app/outputs
+When the user asks you to produce, generate, export, or "give" them a file (code, HTML, images, configs, etc.), **copy** the file to \`/app/outputs/\` so it can be delivered to the user's browser for download.
 - The outputs folder is created automatically before each run.
 - Always **copy** (not move) — keep the original file in place.
-- Use: \`cp /path/to/file /home/daytona/outputs/\`
-- At the end of the task, briefly mention which files were placed in outputs so the user knows what to expect.`;
+- Use: \`cp /path/to/file /app/outputs/\`
+- At the end of the task, briefly mention which files were placed in outputs so the user knows what to expect.
 
-const TOKEN_LIMIT = 200_000; // trigger compaction at 200k tokens
+# Response Format — CRITICAL
+You MUST always end your turn with a text response to the user. NEVER end on a tool call without a follow-up message. After using tools, always provide a brief summary of what you did and the outcome. Even if the task is simple (e.g., a single file write), confirm what was done in plain text.`;
+
+export const TOKEN_LIMIT = 150_000;
 
 export interface OutputFile {
   name: string;
@@ -126,10 +161,9 @@ export interface ToolEvent {
   output?: string;
   content?: string;
   files?: OutputFile[];
+  contextTokens?: number;
+  contextLimit?: number;
 }
-
-// In-memory conversation history per agent
-const histories = new Map<string, BaseMessage[]>();
 
 function estimateTokens(messages: BaseMessage[]): number {
   let chars = 0;
@@ -143,7 +177,6 @@ function estimateTokens(messages: BaseMessage[]): number {
         else chars += JSON.stringify(block).length;
       }
     }
-    // Count tool_calls on AIMessages
     const additional = msg.additional_kwargs;
     if (additional?.tool_calls) {
       chars += JSON.stringify(additional.tool_calls).length;
@@ -213,101 +246,366 @@ Be thorough and specific — include file paths, port numbers, package names. Th
 
   console.log(`[compaction] Compacted ${messages.length} messages (${estimateTokens(messages)} tokens) → summary (${Math.ceil(summary.length / 4)} tokens)`);
 
-  return [new AIMessage(`## Previous Conversation Context (compacted)\n\n${summary}`)];
+  return [
+    new HumanMessage("Continue from previous context:"),
+    new AIMessage(`## Previous Conversation Context\n\n${summary}`),
+  ];
+}
+
+// ===== Exported helpers for API endpoints =====
+
+export async function compactProjectHistory(projectId: string): Promise<{ tokens: number; limit: number }> {
+  const dbMessages = await getProjectMessages(projectId);
+  if (dbMessages.length === 0) {
+    return { tokens: 0, limit: TOKEN_LIMIT };
+  }
+
+  const history = dbMessages.map(dbRowToLangChain);
+  const compacted = await compactHistory(history);
+
+  // Replace DB messages with compacted version
+
+  await deleteProjectMessages(projectId);
+  await saveMessages(compacted.map((m) => langChainToDbRow(m, projectId)));
+
+  return { tokens: estimateTokens(compacted), limit: TOKEN_LIMIT };
+}
+
+export async function getProjectContextInfo(projectId: string): Promise<{ tokens: number; limit: number }> {
+  const dbMessages = await getProjectMessages(projectId);
+  const history = dbMessages.map(dbRowToLangChain);
+  return { tokens: estimateTokens(history), limit: TOKEN_LIMIT };
 }
 
 const DIR_FILE_CAP = 30;
 const IGNORED_DIRS = ["node_modules", "dist", "build", "coverage", "out", ".turbo"];
 
-async function getFileTree(sandbox: Sandbox): Promise<string> {
+async function getRunningServerContext(sandbox: SandboxInstance): Promise<string> {
   try {
-    const ignored = IGNORED_DIRS.map((d) => `-not -path "*/${d}/*"`).join(" ");
-    const result = await sandbox.process.executeCommand(
-      `find /home/daytona -type f -not -path "*/.*" ${ignored} 2>/dev/null | sort`
-    );
-    const paths = (result.result || "").split("\n").map((p) => p.trim()).filter(Boolean);
-    if (paths.length === 0) return "";
+    // Check which ports are listening
+    const portResult = await sandbox.process.exec({
+      command: `ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || echo "no port info"`,
+      waitForCompletion: true,
+    });
+    const portOutput = (portResult.stdout || "").trim();
 
-    // Group files by directory
-    const dirMap = new Map<string, string[]>();
-    for (const p of paths) {
-      const dir = p.substring(0, p.lastIndexOf("/")) || "/";
-      if (!dirMap.has(dir)) dirMap.set(dir, []);
-      dirMap.get(dir)!.push(p.substring(p.lastIndexOf("/") + 1));
-    }
-
-    // Build tree lines with per-dir cap
-    const lines: string[] = ["<project_structure>"];
-    for (const [dir, files] of dirMap) {
-      const displayDir = dir.replace("/home/daytona/", "").replace("/home/daytona", ".") || ".";
-      lines.push(`${displayDir}/`);
-      const shown = files.slice(0, DIR_FILE_CAP);
-      for (const f of shown) lines.push(`  ${f}`);
-      if (files.length > DIR_FILE_CAP) {
-        lines.push(`  {+${files.length - DIR_FILE_CAP} more}`);
+    // Extract listening ports (exclude sandbox-api on 8080)
+    const listeningPorts: { port: number; process: string }[] = [];
+    for (const line of portOutput.split("\n")) {
+      const portMatch = line.match(/:(\d+)\s/);
+      if (portMatch) {
+        const port = parseInt(portMatch[1]);
+        if (port !== 8080 && port > 0 && port < 65536) {
+          const procMatch = line.match(/users:\(\("([^"]+)"/);
+          listeningPorts.push({ port, process: procMatch?.[1] || "unknown" });
+        }
       }
     }
-    lines.push("</project_structure>");
+
+    // Check known server process names
+    const knownServers = ["dev-server"];
+    const runningServers: { name: string; status: string; command: string }[] = [];
+    for (const name of knownServers) {
+      try {
+        const info = await sandbox.process.get(name);
+        if (info.status === "running") {
+          runningServers.push({
+            name,
+            status: info.status,
+            command: info.command || "unknown",
+          });
+        }
+      } catch {
+        // Process doesn't exist
+      }
+    }
+
+    if (runningServers.length === 0 && listeningPorts.length === 0) {
+      return "";
+    }
+
+    const lines: string[] = ["## Running Services"];
+    if (runningServers.length > 0) {
+      for (const s of runningServers) {
+        lines.push(`- Process "${s.name}" is RUNNING (command: \`${s.command}\`)`);
+      }
+    }
+    if (listeningPorts.length > 0) {
+      lines.push("- Listening ports: " + listeningPorts.map(p => `${p.port} (${p.process})`).join(", "));
+    }
+    lines.push("");
+    lines.push("IMPORTANT: A dev server is already running. Do NOT start another one. Use the existing server. If you need to restart it, stop it first with stop_server, then start a new one on the SAME port.");
+
     return lines.join("\n");
   } catch {
     return "";
   }
 }
 
+async function getFileTree(sandbox: SandboxInstance): Promise<string> {
+  try {
+    const ignored = IGNORED_DIRS.map((d) => `-not -path "*/${d}/*"`).join(" ");
+    const result = await sandbox.process.exec({
+      command: `find /app -type f -not -path "*/.*" ${ignored} 2>/dev/null | sort`,
+      waitForCompletion: true,
+    });
+    const paths = (result.stdout || "").split("\n").map((p) => p.trim()).filter(Boolean);
+    if (paths.length === 0) return "";
+
+    // Build a nested tree structure
+    const root: Record<string, any> = {};
+    for (const p of paths) {
+      const rel = p.replace("/app/", "");
+      const parts = rel.split("/");
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!node[parts[i]]) node[parts[i]] = {};
+        node = node[parts[i]];
+      }
+      node[parts[parts.length - 1]] = null; // null = file
+    }
+
+    // Render as markdown tree with box-drawing chars
+    function renderTree(node: Record<string, any>, prefix: string): string[] {
+      const entries = Object.keys(node).sort((a, b) => {
+        // Directories first, then files
+        const aIsDir = node[a] !== null;
+        const bIsDir = node[b] !== null;
+        if (aIsDir && !bIsDir) return -1;
+        if (!aIsDir && bIsDir) return 1;
+        return a.localeCompare(b);
+      });
+
+      const lines: string[] = [];
+      let fileCount = 0;
+
+      for (let i = 0; i < entries.length; i++) {
+        const name = entries[i];
+        const isLast = i === entries.length - 1;
+        const connector = isLast ? "└── " : "├── ";
+        const childPrefix = isLast ? "    " : "│   ";
+
+        if (node[name] === null) {
+          // File
+          fileCount++;
+          if (fileCount <= DIR_FILE_CAP) {
+            lines.push(`${prefix}${connector}${name}`);
+          } else if (fileCount === DIR_FILE_CAP + 1) {
+            const remaining = entries.filter((e, idx) => idx >= i && node[e] === null).length;
+            lines.push(`${prefix}${connector}... (+${remaining} more files)`);
+            break;
+          }
+        } else {
+          // Directory
+          lines.push(`${prefix}${connector}${name}/`);
+          lines.push(...renderTree(node[name], prefix + childPrefix));
+        }
+      }
+      return lines;
+    }
+
+    const treeLines = renderTree(root, "");
+    return `## Current Project Structure\n\`\`\`\n.\n${treeLines.join("\n")}\n\`\`\``;
+  } catch {
+    return "";
+  }
+}
+
+// ===== DB <-> LangChain message conversion =====
+
+function dbRowToLangChain(row: StoredMessage): BaseMessage {
+  if (row.role === "human") {
+    return new HumanMessage(row.content);
+  }
+  if (row.role === "tool") {
+    return new ToolMessage({
+      content: row.content,
+      tool_call_id: row.tool_call_id || "",
+      name: row.name || undefined,
+    });
+  }
+  // ai — use constructor to properly initialize both tool_calls and additional_kwargs
+  if (row.tool_calls?.length) {
+    const toolCalls = row.tool_calls.map((tc: any) => ({
+      name: tc.name,
+      args: typeof tc.args === "string" ? JSON.parse(tc.args) : tc.args || {},
+      id: tc.id,
+      type: "tool_call" as const,
+    }));
+    return new AIMessage({
+      content: row.content,
+      tool_calls: toolCalls,
+      additional_kwargs: {
+        tool_calls: toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function" as const,
+          function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+        })),
+      },
+    });
+  }
+  return new AIMessage(row.content);
+}
+
+function langChainToDbRow(msg: BaseMessage, projectId: string): Omit<StoredMessage, "id" | "created_at"> {
+  const content = typeof msg.content === "string"
+    ? msg.content
+    : Array.isArray(msg.content)
+      ? msg.content.map((b: any) => b.text || JSON.stringify(b)).join("")
+      : JSON.stringify(msg.content);
+
+  if (msg instanceof HumanMessage) {
+    return { project_id: projectId, role: "human", content, tool_calls: null, tool_call_id: null, name: null };
+  }
+
+  if (msg instanceof ToolMessage) {
+    return {
+      project_id: projectId,
+      role: "tool",
+      content,
+      tool_calls: null,
+      tool_call_id: msg.tool_call_id || null,
+      name: msg.name || null,
+    };
+  }
+
+  // AIMessage
+  const aiMsg = msg as AIMessage;
+  let toolCalls: any[] | null = null;
+  if (aiMsg.tool_calls?.length) {
+    toolCalls = aiMsg.tool_calls.map((tc) => ({ name: tc.name, args: tc.args, id: tc.id }));
+  }
+  return { project_id: projectId, role: "ai", content, tool_calls: toolCalls, tool_call_id: null, name: null };
+}
+
+
+// ===== History sanitization =====
+// Ensures message history is valid for the LLM API.
+// Fixes issues from aborted requests, crashes, or partial saves.
+
+function sanitizeHistory(messages: BaseMessage[]): BaseMessage[] {
+  if (messages.length === 0) return [];
+
+  const result: BaseMessage[] = [];
+
+  // 1. Skip leading non-human messages
+  let start = 0;
+  while (start < messages.length && !(messages[start] instanceof HumanMessage)) {
+    start++;
+  }
+
+  for (let i = start; i < messages.length; i++) {
+    const msg = messages[i];
+
+    if (msg instanceof ToolMessage) {
+      // Only include tool messages if the previous message in result is an AI with matching tool_calls
+      const prev = result[result.length - 1];
+      if (prev instanceof AIMessage && prev.tool_calls?.some(tc => tc.id === msg.tool_call_id)) {
+        result.push(msg);
+      }
+      // Otherwise skip orphaned tool messages
+    } else if (msg instanceof AIMessage) {
+      result.push(msg);
+    } else if (msg instanceof HumanMessage) {
+      result.push(msg);
+    }
+  }
+
+  // 2. Trim trailing incomplete tool call sequences
+  // If the last AI message has tool_calls, check all tool_calls have matching tool messages after it
+  while (result.length > 0) {
+    const last = result[result.length - 1];
+
+    if (last instanceof ToolMessage) {
+      // Tool message at end is fine (it's a response)
+      break;
+    }
+
+    if (last instanceof AIMessage && last.tool_calls?.length) {
+      // AI with tool_calls at the end — check if all tool_calls have responses
+      const aiIndex = result.length - 1;
+      const expectedIds = new Set(last.tool_calls.map(tc => tc.id));
+      const foundIds = new Set<string>();
+      for (let j = aiIndex + 1; j < result.length; j++) {
+        const m = result[j];
+        if (m instanceof ToolMessage && m.tool_call_id) {
+          foundIds.add(m.tool_call_id);
+        }
+      }
+      if (foundIds.size < expectedIds.size) {
+        // Incomplete — remove this AI message and any tool messages after it
+        result.splice(aiIndex);
+        continue;
+      }
+      break;
+    }
+
+    break;
+  }
+
+  // 3. Don't end on a trailing human message with no response (it'll be re-sent)
+  // Actually this is fine — the current user message will be appended after
+
+  return result;
+}
+
+// ===== Main agent runner =====
+
 export async function runAgentStream(
-  sandbox: Sandbox,
-  agentId: string,
+  sandbox: SandboxInstance,
+  projectId: string,
   prompt: string,
   modelId: string,
   onEvent: (event: ToolEvent) => void,
   signal?: AbortSignal,
-  savedMessages?: { role: "user" | "assistant"; content: string }[]
 ) {
   const createModel = AVAILABLE_MODELS[modelId] || AVAILABLE_MODELS["claude-sonnet"];
   const model = createModel();
-
   const tools = createTools(sandbox);
 
-  // Ensure outputs folder exists
-  await sandbox.process.executeCommand("mkdir -p /home/daytona/outputs");
+  await sandbox.process.exec({ command: "mkdir -p /app/outputs", waitForCompletion: true });
 
-  // Prepend live file tree to every user message
-  const fileTree = await getFileTree(sandbox);
-  const promptWithContext = fileTree
-    ? `${fileTree}\n\n${prompt}`
-    : prompt;
+  const [fileTree, serverContext] = await Promise.all([
+    getFileTree(sandbox),
+    getRunningServerContext(sandbox),
+  ]);
+
+  let systemPromptText = SYSTEM_PROMPT;
+  if (serverContext) systemPromptText += `\n\n${serverContext}`;
+  if (fileTree) systemPromptText += `\n\n${fileTree}`;
 
   const agent = createReactAgent({
     llm: model,
     tools,
-    messageModifier: new SystemMessage(SYSTEM_PROMPT),
+    messageModifier: new SystemMessage(systemPromptText),
   });
 
-  // Build message list: past history + new user message
-  let history = histories.get(agentId) || [];
-
-  // If in-memory history is empty but we have saved messages (e.g. server restart or model switch),
-  // reconstruct history from persisted chat so the agent has full conversation context
-  if (history.length === 0 && savedMessages && savedMessages.length > 0) {
-    history = savedMessages.map((m) =>
-      m.role === "user" ? new HumanMessage(m.content) : new AIMessage(m.content)
-    );
-    histories.set(agentId, history);
-    console.log(`[agent ${agentId}] Seeded history from ${savedMessages.length} saved messages`);
+  // Load history from DB
+  let history: BaseMessage[] = [];
+  try {
+    const dbMessages = await getProjectMessages(projectId);
+    if (dbMessages.length > 0) {
+      history = sanitizeHistory(dbMessages.map(dbRowToLangChain));
+      console.log(`[agent ${projectId}] Loaded ${dbMessages.length} messages from DB, ${history.length} after sanitization`);
+    }
+  } catch (err: any) {
+    console.error(`[agent ${projectId}] Failed to load history from DB:`, err.message);
   }
 
-  // Check if history exceeds token limit — compact if needed
+  // Auto-compact if needed
   const tokenCount = estimateTokens(history);
   if (tokenCount >= TOKEN_LIMIT) {
-    console.log(`[agent ${agentId}] History at ${tokenCount} tokens, compacting...`);
+    console.log(`[agent ${projectId}] History at ${tokenCount} tokens, auto-compacting...`);
     history = await compactHistory(history);
-    histories.set(agentId, history);
+    // Replace DB messages with compacted version
+  
+    await deleteProjectMessages(projectId);
+    await saveMessages(history.map((m) => langChainToDbRow(m, projectId)));
   }
 
-  const userMsg = new HumanMessage(promptWithContext);
+  const userMsg = new HumanMessage(prompt);
   const inputMessages = [...history, userMsg];
 
-  // Stream events for the UI (tool indicators) and collect all messages
   const stream = await agent.streamEvents(
     { messages: inputMessages },
     { version: "v2", recursionLimit: 50, signal }
@@ -315,29 +613,36 @@ export async function runAgentStream(
 
   let lastContent = "";
   let allNewMessages: BaseMessage[] = [];
+  // Running token estimate: start from input context
+  let runningTokens = estimateTokens(inputMessages);
 
   for await (const event of stream) {
     if (signal?.aborted) break;
 
     if (event.event === "on_tool_start") {
+      const argsStr = event.data?.input ? JSON.stringify(event.data.input) : "";
+      runningTokens += Math.ceil(argsStr.length / 4);
       onEvent({
         type: "tool_start",
         tool: event.name,
         args: event.data?.input,
+        contextTokens: runningTokens,
+        contextLimit: TOKEN_LIMIT,
       });
     } else if (event.event === "on_tool_end") {
       const output = event.data?.output;
       const text = typeof output === "string" ? output : output?.content ?? "";
       const outputStr = typeof text === "string" ? text : "";
-      // Send full output for preview_url so frontend can extract the URL
+      runningTokens += Math.ceil(outputStr.length / 4);
       const limit = event.name === "preview_url" ? 500 : 200;
       onEvent({
         type: "tool_end",
         tool: event.name,
         output: outputStr.slice(0, limit),
+        contextTokens: runningTokens,
+        contextLimit: TOKEN_LIMIT,
       });
     } else if (event.event === "on_chain_end" && event.name === "LangGraph") {
-      // Final event from the graph — contains all messages including tool calls
       const output = event.data?.output;
       if (output?.messages) {
         allNewMessages = output.messages;
@@ -352,49 +657,75 @@ export async function runAgentStream(
     }
   }
 
-  // Store the full message chain (includes user msg, AI msgs with tool_calls, ToolMessages, final AI response)
-  // allNewMessages contains the complete list from the graph run (input + generated)
-  // We only want the new messages (skip the ones we sent as input)
+  // Extract only the new messages (skip what we sent as input)
   const newOnly = allNewMessages.slice(inputMessages.length);
+
   if (newOnly.length > 0) {
-    histories.set(agentId, [...history, userMsg, ...newOnly]);
+    // Persist to DB: user message + all new messages from the agent
+    try {
+      const dbRows = [
+        langChainToDbRow(userMsg, projectId),
+        ...newOnly.map((m) => langChainToDbRow(m, projectId)),
+      ];
+      await saveMessages(dbRows);
+      console.log(`[agent ${projectId}] Persisted ${dbRows.length} messages to DB`);
+    } catch (err: any) {
+      console.error(`[agent ${projectId}] Failed to persist messages:`, err.message);
+    }
+  } else if (lastContent) {
+    // Fallback — only save if there's actual content
+    try {
+      await saveMessages([
+        langChainToDbRow(userMsg, projectId),
+        langChainToDbRow(new AIMessage(lastContent), projectId),
+      ]);
+    } catch (err: any) {
+      console.error(`[agent ${projectId}] Failed to persist fallback:`, err.message);
+    }
   } else {
-    // Fallback if we didn't get the full chain
-    histories.set(agentId, [...history, userMsg, new AIMessage(lastContent)]);
+    // No response at all — just save the user message so it's not lost
+    try {
+      await saveMessages([langChainToDbRow(userMsg, projectId)]);
+    } catch (err: any) {
+      console.error(`[agent ${projectId}] Failed to persist user message:`, err.message);
+    }
   }
 
-  onEvent({ type: "result", content: lastContent });
+  const contextTokens = estimateTokens([...history, userMsg, ...newOnly]);
+  onEvent({ type: "result", content: lastContent, contextTokens, contextLimit: TOKEN_LIMIT });
 
-  // Fetch output files from sandbox and emit to frontend
+  // Fetch output files
   try {
-    const listResult = await sandbox.process.executeCommand(
-      "find /home/daytona/outputs -type f 2>/dev/null"
-    );
-    const filePaths = (listResult.result || "")
+    const listResult = await sandbox.process.exec({
+      command: "find /app/outputs -type f 2>/dev/null",
+      waitForCompletion: true,
+    });
+    const filePaths = (listResult.stdout || "")
       .split("\n")
       .map((p: string) => p.trim())
       .filter(Boolean);
 
     if (filePaths.length > 0) {
-      const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+      const MAX_FILE_SIZE = 5 * 1024 * 1024;
       const outputFiles: OutputFile[] = [];
 
       for (const filePath of filePaths) {
-        const sizeResult = await sandbox.process.executeCommand(
-          `stat -c%s "${filePath}" 2>/dev/null || stat -f%z "${filePath}" 2>/dev/null`
-        );
-        const size = parseInt((sizeResult.result || "0").trim(), 10);
+        const sizeResult = await sandbox.process.exec({
+          command: `stat -c%s "${filePath}" 2>/dev/null || stat -f%z "${filePath}" 2>/dev/null`,
+          waitForCompletion: true,
+        });
+        const size = parseInt((sizeResult.stdout || "0").trim(), 10);
         if (size > MAX_FILE_SIZE || size === 0) continue;
 
-        const b64Result = await sandbox.process.executeCommand(
-          `base64 "${filePath}"`
-        );
-        const b64 = (b64Result.result || "").trim();
+        const b64Result = await sandbox.process.exec({
+          command: `base64 "${filePath}"`,
+          waitForCompletion: true,
+        });
+        const b64 = (b64Result.stdout || "").trim();
         if (!b64) continue;
 
         const name = filePath.split("/").pop() || filePath;
-        const relativePath = filePath.replace("/home/daytona/outputs/", "");
-
+        const relativePath = filePath.replace("/app/outputs/", "");
         outputFiles.push({ name, path: relativePath, content: b64, size });
       }
 
@@ -402,10 +733,9 @@ export async function runAgentStream(
         onEvent({ type: "outputs", files: outputFiles });
       }
 
-      // Clear outputs folder for next run
-      await sandbox.process.executeCommand("rm -rf /home/daytona/outputs/*");
+      await sandbox.process.exec({ command: "rm -rf /app/outputs/*", waitForCompletion: true });
     }
   } catch {
-    // Ignore errors fetching outputs
+    // Ignore
   }
 }

@@ -1,23 +1,50 @@
 "use client";
 
+import { useState } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import IconButton from "@mui/material/IconButton";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
+import ListItemIcon from "@mui/material/ListItemIcon";
+import ListItemText from "@mui/material/ListItemText";
 
 interface Project {
   id: string;
   name: string;
   lastEdited: string;
-  previewUrl: string | null;
 }
 
 interface Props {
   project: Project;
   onClick: () => void;
+  onDelete: (id: string) => void;
 }
 
-export default function ProjectCard({ project, onClick }: Props) {
+const GRADIENTS = [
+  "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+  "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
+  "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)",
+  "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)",
+  "linear-gradient(135deg, #fa709a 0%, #fee140 100%)",
+  "linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)",
+  "linear-gradient(135deg, #fccb90 0%, #d57eeb 100%)",
+  "linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%)",
+];
+
+function getGradient(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
+}
+
+export default function ProjectCard({ project, onClick, onDelete }: Props) {
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+
   return (
     <Box
       onClick={onClick}
@@ -28,53 +55,36 @@ export default function ProjectCard({ project, onClick }: Props) {
         borderRadius: 3,
         overflow: "hidden",
         cursor: "pointer",
-        transition: "all 0.15s",
+        transition: "all 0.2s ease",
         "&:hover": {
-          borderColor: "primary.light",
-          boxShadow: "0 4px 16px 0 rgb(0 0 0 / 0.08)",
-          transform: "translateY(-1px)",
+          borderColor: "primary.main",
+          boxShadow: "0 8px 24px 0 rgba(0,0,0,0.3)",
+          transform: "translateY(-2px)",
         },
       }}
     >
       {/* Thumbnail */}
       <Box
         sx={{
-          height: 140,
-          bgcolor: "#F4F4F5",
-          borderBottom: "1px solid",
-          borderColor: "divider",
+          height: 120,
+          background: getGradient(project.name),
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           position: "relative",
-          overflow: "hidden",
         }}
       >
-        {project.previewUrl ? (
-          <iframe
-            src={project.previewUrl}
-            style={{ width: "100%", height: "100%", border: "none", pointerEvents: "none" }}
-            title={project.name}
-          />
-        ) : (
-          <Box
-            sx={{
-              width: "100%",
-              height: "100%",
-              background: "linear-gradient(135deg, #F0F0FF 0%, #E8E8F8 100%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {/* Placeholder skeleton lines */}
-            <Box sx={{ width: "60%", display: "flex", flexDirection: "column", gap: 1 }}>
-              <Box sx={{ height: 8, bgcolor: "rgba(99,102,241,0.15)", borderRadius: 1 }} />
-              <Box sx={{ height: 6, bgcolor: "rgba(99,102,241,0.1)", borderRadius: 1, width: "80%" }} />
-              <Box sx={{ height: 6, bgcolor: "rgba(99,102,241,0.08)", borderRadius: 1, width: "60%" }} />
-            </Box>
-          </Box>
-        )}
+        <Typography
+          sx={{
+            color: "rgba(255,255,255,0.85)",
+            fontWeight: 700,
+            fontSize: "2rem",
+            textTransform: "uppercase",
+            userSelect: "none",
+          }}
+        >
+          {project.name.charAt(0)}
+        </Typography>
       </Box>
 
       {/* Footer */}
@@ -87,25 +97,51 @@ export default function ProjectCard({ project, onClick }: Props) {
           justifyContent: "space-between",
         }}
       >
-        <Box>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography
             variant="body2"
             fontWeight={600}
-            sx={{ color: "text.primary", lineHeight: 1.3 }}
+            noWrap
+            sx={{ color: "text.primary", lineHeight: 1.4 }}
           >
             {project.name}
           </Typography>
-          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+          <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.7rem" }}>
             {project.lastEdited}
           </Typography>
         </Box>
         <IconButton
           size="small"
-          onClick={(e) => e.stopPropagation()}
-          sx={{ color: "text.secondary", "&:hover": { color: "text.primary" } }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setAnchorEl(e.currentTarget);
+          }}
+          sx={{ color: "text.secondary", ml: 0.5, "&:hover": { color: "text.primary" } }}
         >
           <MoreHorizIcon fontSize="small" />
         </IconButton>
+        <Menu
+          anchorEl={anchorEl}
+          open={Boolean(anchorEl)}
+          onClose={(e: any) => {
+            e?.stopPropagation?.();
+            setAnchorEl(null);
+          }}
+          onClick={(e) => e.stopPropagation()}
+          slotProps={{ paper: { sx: { minWidth: 140, borderRadius: 2 } } }}
+        >
+          <MenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              setAnchorEl(null);
+              onDelete(project.id);
+            }}
+            sx={{ color: "error.main" }}
+          >
+            <ListItemIcon><DeleteOutlineIcon fontSize="small" sx={{ color: "error.main" }} /></ListItemIcon>
+            <ListItemText>Delete</ListItemText>
+          </MenuItem>
+        </Menu>
       </Box>
     </Box>
   );
