@@ -113,7 +113,7 @@ async function uploadFiles(
           "Content-Length": String(file.size),
           "x-vercel-digest": file.sha,
         },
-        body: file.content,
+        body: new Uint8Array(file.content),
       });
 
       if (!res.ok && res.status !== 409) {

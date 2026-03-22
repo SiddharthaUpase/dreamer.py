@@ -9,6 +9,14 @@ export interface StoredProject {
   preview_url: string | null;
   created_at: string;
   updated_at: string;
+  // Provisioning
+  database_url: string | null;
+  jwt_secret: string | null;
+  r2_bucket_name: string | null;
+  r2_access_key_id: string | null;
+  r2_secret_access_key: string | null;
+  r2_token_id: string | null;
+  r2_public_domain: string | null;
 }
 
 export interface StoredMessage {

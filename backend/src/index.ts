@@ -1,16 +1,20 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import multer from "multer";
 import type { Request, Response, NextFunction } from "express";
 import type { SandboxInstance } from "@blaxel/core";
 import { createSandbox, getSandbox, deleteSandbox } from "./services/sandbox.js";
 import {
   runAgentStream,
   collectOutputFiles,
+  compactHistory,
   MODEL_LIST,
   dbRowToLangChain,
   langChainToDbRow,
   sanitizeHistory,
+  type DatabaseConfig,
+  type DeployConfig,
 } from "./agent/index.js";
 import { verifyUser } from "./services/supabase.js";
 import {
@@ -23,10 +27,31 @@ import {
   saveMessages,
   deleteProjectMessages,
 } from "./services/projectStore.js";
+import {
+  provisionProject,
+  injectProjectEnv,
+  injectSkills,
+  readSandboxEnvVars,
+  enableBucketPublicAccess,
+} from "./services/provisioning.js";
+import { deploy } from "./services/deploy.js";
+import { createDeviceCode, pollDeviceCode, approveDeviceCode, verifyApiKey } from "./services/cliAuth.js";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
 
 const app = express();
-app.use(cors({ origin: "http://localhost:3000" }));
-app.use(express.json());
+app.use(cors({ origin: true }));
+app.use(express.json({ limit: "50mb" }));
+
+// ===== Request logger =====
+app.use((req: Request, _res, next) => {
+  const ts = new Date().toISOString().slice(11, 19);
+  const method = req.method.padEnd(6);
+  const path = req.path;
+  console.log(`\x1b[2m[${ts}]\x1b[0m \x1b[36m${method}\x1b[0m ${path}`);
+  next();
+});
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // ===== Auth middleware =====
 interface AuthRequest extends Request {
@@ -44,6 +69,20 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
     return;
   }
   const token = authHeader.slice(7);
+
+  // Try API key first (CLI auth)
+  if (token.startsWith("vas_sk_")) {
+    const result = await verifyApiKey(token);
+    if (result) {
+      req.userId = result.userId;
+      next();
+      return;
+    }
+    res.status(401).json({ error: "Invalid API key" });
+    return;
+  }
+
+  // Fall back to Supabase JWT (web app auth)
   const user = await verifyUser(token);
   if (!user) {
     res.status(401).json({ error: "Invalid or expired token" });
@@ -54,21 +93,15 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
 }
 
 // ===== Sandbox helpers =====
-
 async function getProjectSandbox(projectId: string): Promise<SandboxInstance> {
   const stored = await getProject(projectId);
-
   if (stored?.sandbox_id) {
     try {
-      console.log(`Reconnecting to sandbox proj-${projectId}...`);
       return await getSandbox(projectId);
-    } catch (err: any) {
-      console.log(`Failed to reconnect sandbox: ${err.message}. Creating new one.`);
-    }
+    } catch { /* fall through to create */ }
   }
 
-  const template = stored?.template || "blank";
-  console.log(`Creating sandbox for project ${projectId} (template: ${template})...`);
+  const template = stored?.template || "nextjs";
   const sandbox = await createSandbox(projectId, template);
   if (stored) {
     await updateProject(projectId, { sandbox_id: sandbox.metadata?.name || `proj-${projectId}` });
@@ -76,12 +109,62 @@ async function getProjectSandbox(projectId: string): Promise<SandboxInstance> {
   return sandbox;
 }
 
-// Close project — no-op, Blaxel auto-scales to zero after ~15s idle.
+// Verify project ownership
+async function getOwnedProject(projectId: string, userId: string) {
+  const project = await getProject(projectId);
+  if (!project || project.user_id !== userId) return null;
+  return project;
+}
+
+// Close project — no-op
 app.post("/api/projects/:id/close", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-// Apply auth to all /api routes
+// ===== CLI Auth (no auth required) =====
+
+// Start device code flow
+app.post("/api/auth/cli/start", (_req, res) => {
+  const { code } = createDeviceCode();
+  res.json({ code });
+});
+
+// CLI polls this until approved
+app.get("/api/auth/cli/poll/:code", (req, res) => {
+  const result = pollDeviceCode(req.params.code);
+  res.json(result);
+});
+
+// Browser approves (requires Supabase auth)
+app.post("/api/auth/cli/approve", async (req: AuthRequest, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "Not logged in" });
+    return;
+  }
+  const token = authHeader.slice(7);
+  const user = await verifyUser(token);
+  if (!user) {
+    res.status(401).json({ error: "Invalid session" });
+    return;
+  }
+
+  const { code } = req.body;
+  if (!code) {
+    res.status(400).json({ error: "Code is required" });
+    return;
+  }
+
+  const result = await approveDeviceCode(code, user.id);
+  if (!result.success) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+
+  res.json({ status: "approved", email: user.email });
+});
+
+// Apply auth to all /api routes (below this line)
 app.use("/api", requireAuth);
 
 // ===== Models =====
@@ -89,9 +172,9 @@ app.get("/api/models", (_req, res) => {
   res.json({ models: MODEL_LIST });
 });
 
-// ===== Project endpoints =====
+// ===== Project CRUD =====
 
-// Create project
+// Create project (with provisioning)
 app.post("/api/projects", async (req: AuthRequest, res) => {
   const { id, name, template } = req.body;
   if (!id || !name) {
@@ -99,15 +182,44 @@ app.post("/api/projects", async (req: AuthRequest, res) => {
     return;
   }
   try {
+    // Save project to DB first
     await saveProject({
       id,
       user_id: req.userId!,
       name,
-      template: template || "blank",
+      template: template || "nextjs",
       sandbox_id: null,
       preview_url: null,
+      database_url: null,
+      jwt_secret: null,
+      r2_bucket_name: null,
+      r2_access_key_id: null,
+      r2_secret_access_key: null,
+      r2_token_id: null,
+      r2_public_domain: null,
     });
-    res.json({ project: { id, name, template: template || "blank" } });
+
+    // Provision resources (Neon DB + R2 bucket)
+    const provision = await provisionProject(name);
+
+    // Store provisioning results in project metadata
+    await updateProject(id, {
+      database_url: provision.databaseUrl,
+      jwt_secret: provision.jwtSecret,
+      r2_bucket_name: provision.r2BucketName || null,
+      r2_access_key_id: provision.r2AccessKeyId || null,
+      r2_secret_access_key: provision.r2SecretAccessKey || null,
+      r2_token_id: provision.r2TokenId || null,
+      r2_public_domain: provision.r2PublicDomain || null,
+    });
+
+    res.json({
+      project: { id, name, template: template || "nextjs" },
+      provisioning: {
+        database: !!provision.databaseUrl,
+        storage: !!provision.r2BucketName,
+      },
+    });
   } catch (err: any) {
     console.error("Failed to create project:", err.message);
     res.status(500).json({ error: err.message });
@@ -124,19 +236,44 @@ app.get("/api/projects", async (req: AuthRequest, res) => {
   }
 });
 
-// Open project — wake sandbox, return status + previewUrl + messages
-app.post("/api/projects/:id/open", async (req: AuthRequest, res) => {
+// Get project details
+app.get("/api/projects/:id", async (req: AuthRequest, res) => {
+  try {
+    const project = await getOwnedProject(paramId(req), req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    res.json({ project });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete project
+app.delete("/api/projects/:id", async (req: AuthRequest, res) => {
+  try {
+    const project = await getOwnedProject(paramId(req), req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    if (project.sandbox_id) {
+      try { await deleteSandbox(paramId(req)); } catch { /* ignore */ }
+    }
+    await deleteProject(paramId(req));
+    res.json({ status: "deleted" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Sandbox / Connect =====
+
+// Connect to project — wake sandbox, inject env/skills, return preview URL
+app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
   const pid = paramId(req);
   try {
-    const project = await getProject(pid);
-    if (!project || project.user_id !== req.userId) {
-      res.status(404).json({ error: "Project not found" });
-      return;
-    }
+    const project = await getOwnedProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
 
     const sandbox = await getProjectSandbox(pid);
-    const messages = await getProjectMessages(pid);
 
+    // Get preview URL
     let previewUrl: string | null = null;
     try {
       const preview = await sandbox.previews.createIfNotExists({
@@ -151,7 +288,19 @@ app.post("/api/projects/:id/open", async (req: AuthRequest, res) => {
       previewUrl = project.preview_url;
     }
 
-    // Auto-start dev server for Next.js template if not already running
+    // Inject env vars
+    const envData = {
+      databaseUrl: project.database_url || undefined,
+      jwtSecret: project.jwt_secret || undefined,
+      r2AccessKeyId: project.r2_access_key_id || undefined,
+      r2SecretAccessKey: project.r2_secret_access_key || undefined,
+      r2BucketName: project.r2_bucket_name || undefined,
+      r2PublicDomain: project.r2_public_domain || undefined,
+    };
+    await injectProjectEnv(sandbox, envData);
+    await injectSkills(sandbox);
+
+    // Auto-start dev server for Next.js
     if (project.template === "nextjs") {
       try {
         const check = await sandbox.process.exec({
@@ -159,7 +308,6 @@ app.post("/api/projects/:id/open", async (req: AuthRequest, res) => {
           waitForCompletion: true,
         });
         if (!check.stdout?.includes("200") && !check.stdout?.includes("304")) {
-          console.log(`Auto-starting Next.js dev server for project ${pid}...`);
           await sandbox.process.exec({
             name: "dev-server",
             command: "npm run dev -- --port 3000",
@@ -169,10 +317,10 @@ app.post("/api/projects/:id/open", async (req: AuthRequest, res) => {
           });
           await new Promise((r) => setTimeout(r, 5000));
         }
-      } catch {
-        // Non-critical
-      }
+      } catch { /* non-critical */ }
     }
+
+    const messages = await getProjectMessages(pid);
 
     res.json({
       status: "ready",
@@ -182,66 +330,111 @@ app.post("/api/projects/:id/open", async (req: AuthRequest, res) => {
       messages,
     });
   } catch (err: any) {
-    console.error("Failed to open project sandbox:", err.message);
-    res.status(err.status || 500).json({ error: err.message });
+    console.error("Failed to connect:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Project chat — SSE streaming
+// ===== File Upload =====
+
+app.post("/api/projects/:id/upload", upload.single("file"), async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  try {
+    const project = await getOwnedProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+    const file = req.file;
+    if (!file) { res.status(400).json({ error: "No file provided" }); return; }
+
+    const sandbox = await getProjectSandbox(pid);
+    try { await sandbox.fs.mkdir("/app/uploads"); } catch { /* exists */ }
+
+    const filename = file.originalname.replace(/[\s\u00A0]/g, "_");
+    const sandboxPath = `/app/uploads/${filename}`;
+    await sandbox.fs.writeBinary(sandboxPath, file.buffer);
+
+    res.json({ path: sandboxPath, size: file.size });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Agent Chat (SSE) =====
+
 app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
   const { message, model } = req.body;
-  const projectId = paramId(req);
+  const pid = paramId(req);
 
   if (!message || typeof message !== "string") {
     res.status(400).json({ error: "message is required" });
     return;
   }
 
-  const project = await getProject(projectId);
-  if (!project || project.user_id !== req.userId) {
-    res.status(404).json({ error: "Project not found" });
-    return;
-  }
+  const project = await getOwnedProject(pid, req.userId!);
+  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+  console.log(`\x1b[33m[chat]\x1b[0m project=${pid} model=${model || "claude-sonnet"} msg="${message.slice(0, 60)}${message.length > 60 ? "..." : ""}"`);
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering if proxied
   res.flushHeaders();
 
   const abortController = new AbortController();
-  res.on("close", () => abortController.abort());
+  res.on("close", () => { abortController.abort(); console.log(`\x1b[2m[chat]\x1b[0m stream closed for ${pid}`); });
+
+  // Disable response buffering for SSE
+  res.socket?.setNoDelay(true);
+
+  const sendEvent = (event: any) => {
+    if (abortController.signal.aborted) return;
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
 
   try {
-    const sandbox = await getProjectSandbox(projectId);
+    const sandbox = await getProjectSandbox(pid);
+    console.log(`\x1b[2m[chat]\x1b[0m sandbox connected, loading history...`);
 
-    // Load history from DB
-    let history = sanitizeHistory(
-      (await getProjectMessages(projectId)).map(dbRowToLangChain)
+    const history = sanitizeHistory(
+      (await getProjectMessages(pid)).map(dbRowToLangChain)
     );
+    console.log(`\x1b[2m[chat]\x1b[0m ${history.length} history messages, starting agent...`);
 
-    // Run agent
+    // Build configs
+    const dbConfig: DatabaseConfig | undefined = project.database_url
+      ? { connectionString: project.database_url }
+      : undefined;
+
+    const envVars = await readSandboxEnvVars(sandbox);
+    const deployConfig: DeployConfig | undefined = process.env.VERCEL_TOKEN
+      ? {
+          projectName: `vas-${project.name}`,
+          vercelToken: process.env.VERCEL_TOKEN,
+          vercelTeamId: process.env.VERCEL_TEAM_ID || undefined,
+          envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
+        }
+      : undefined;
+
     const result = await runAgentStream(
       sandbox, history, message, model || "claude-sonnet",
-      (event) => {
-        if (abortController.signal.aborted) return;
-        if (event.type === "tool_end" && event.tool === "preview_url" && event.output) {
-          const urlMatch = event.output.match(/https?:\/\/[^\s]+/);
-          if (urlMatch) updateProject(projectId, { preview_url: urlMatch[0] });
-        }
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
-      },
+      sendEvent,
       abortController.signal,
       project.preview_url || undefined,
+      dbConfig,
+      deployConfig,
     );
 
-    // Persist new messages to DB
+    console.log(`\x1b[32m[chat]\x1b[0m agent done, ${result.newMessages.length} new messages, ${result.contextTokens} tokens`);
+
+    // Persist messages
     if (result.newMessages.length > 0) {
       try {
-        const dbRows = result.newMessages.map((m) => langChainToDbRow(m, projectId));
+        const dbRows = result.newMessages.map((m) => langChainToDbRow(m, pid));
         await saveMessages(dbRows);
-        console.log(`[chat ${projectId}] Persisted ${dbRows.length} messages`);
+        console.log(`\x1b[2m[chat]\x1b[0m persisted ${dbRows.length} messages`);
       } catch (err: any) {
-        console.error(`[chat ${projectId}] Failed to persist:`, err.message);
+        console.error(`\x1b[31m[chat]\x1b[0m failed to persist:`, err.message);
       }
     }
 
@@ -251,10 +444,7 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
       res.write(`data: ${JSON.stringify({ type: "outputs", files })}\n\n`);
     }
   } catch (err: any) {
-    if (abortController.signal.aborted) {
-      res.write(`data: ${JSON.stringify({ type: "error", content: "Aborted" })}\n\n`);
-    } else {
-      console.error("Project agent error:", err.message);
+    if (!abortController.signal.aborted) {
       res.write(`data: ${JSON.stringify({ type: "error", content: err.message })}\n\n`);
     }
   } finally {
@@ -262,50 +452,106 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
   }
 });
 
-// Clear chat — delete all messages
-app.post("/api/projects/:id/clear-chat", async (req: AuthRequest, res) => {
-  try {
-    const project = await getProject(paramId(req));
-    if (!project || project.user_id !== req.userId) {
-      res.status(404).json({ error: "Project not found" });
-      return;
-    }
-    await deleteProjectMessages(paramId(req));
-    res.json({ status: "cleared" });
-  } catch (err: any) {
-    console.error("Clear chat error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Abort project run — handled by client closing SSE connection
+// Abort — handled by client closing SSE connection
 app.post("/api/projects/:id/abort", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-// Delete project
-app.delete("/api/projects/:id", async (req: AuthRequest, res) => {
+// ===== History =====
+
+app.get("/api/projects/:id/history", async (req: AuthRequest, res) => {
   try {
-    const project = await getProject(paramId(req));
-    if (!project || project.user_id !== req.userId) {
-      res.status(404).json({ error: "Project not found" });
-      return;
-    }
-    if (project.sandbox_id) {
-      try {
-        await deleteSandbox(paramId(req));
-      } catch (err: any) {
-        console.log(`Could not delete sandbox: ${err.message}`);
-      }
-    }
-    await deleteProject(paramId(req));
-    res.json({ status: "deleted" });
+    const project = await getOwnedProject(paramId(req), req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    const messages = await getProjectMessages(paramId(req));
+    res.json({ messages });
   } catch (err: any) {
-    console.error("Delete project error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
+app.delete("/api/projects/:id/history", async (req: AuthRequest, res) => {
+  try {
+    const project = await getOwnedProject(paramId(req), req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    await deleteProjectMessages(paramId(req));
+    res.json({ status: "cleared" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/projects/:id/compact", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  try {
+    const project = await getOwnedProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+    const storedMsgs = await getProjectMessages(pid);
+    if (storedMsgs.length < 4) {
+      res.status(400).json({ error: "Not enough history to compact" });
+      return;
+    }
+
+    const history = storedMsgs.map(dbRowToLangChain);
+    const { human, ai } = await compactHistory(history);
+
+    // Clear old messages and save compacted ones
+    await deleteProjectMessages(pid);
+    const now = Date.now();
+    await saveMessages([
+      { project_id: pid, role: "human", content: human, tool_calls: null, tool_call_id: null, name: null, created_at: new Date(now).toISOString() } as any,
+      { project_id: pid, role: "ai", content: ai, tool_calls: null, tool_call_id: null, name: null, created_at: new Date(now + 1).toISOString() } as any,
+    ]);
+
+    res.json({ status: "compacted", before: storedMsgs.length, after: 2 });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Deploy =====
+
+app.post("/api/projects/:id/deploy", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  try {
+    const project = await getOwnedProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+    if (!process.env.VERCEL_TOKEN) {
+      res.status(400).json({ error: "Vercel not configured" });
+      return;
+    }
+
+    // SSE for deploy status
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    res.socket?.setNoDelay(true);
+
+    const sandbox = await getProjectSandbox(pid);
+    const envVars = await readSandboxEnvVars(sandbox);
+
+    const result = await deploy(sandbox, {
+      projectName: `vas-${project.name}`,
+      token: process.env.VERCEL_TOKEN,
+      teamId: process.env.VERCEL_TEAM_ID || undefined,
+      envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
+    }, (msg) => {
+      res.write(`data: ${JSON.stringify({ type: "status", message: msg })}\n\n`);
+    });
+
+    res.write(`data: ${JSON.stringify({ type: "result", ...result })}\n\n`);
+    res.end();
+  } catch (err: any) {
+    res.write(`data: ${JSON.stringify({ type: "error", message: err.message })}\n\n`);
+    res.end();
+  }
+});
+
+// ===== Health =====
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
