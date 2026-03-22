@@ -4,7 +4,14 @@ import cors from "cors";
 import type { Request, Response, NextFunction } from "express";
 import type { SandboxInstance } from "@blaxel/core";
 import { createSandbox, getSandbox, deleteSandbox } from "./services/sandbox.js";
-import { runAgentStream, MODEL_LIST, TOKEN_LIMIT, compactProjectHistory } from "./agent/index.js";
+import {
+  runAgentStream,
+  collectOutputFiles,
+  MODEL_LIST,
+  dbRowToLangChain,
+  langChainToDbRow,
+  sanitizeHistory,
+} from "./agent/index.js";
 import { verifyUser } from "./services/supabase.js";
 import {
   getAllProjects,
@@ -13,6 +20,7 @@ import {
   updateProject,
   deleteProject,
   getProjectMessages,
+  saveMessages,
   deleteProjectMessages,
 } from "./services/projectStore.js";
 
@@ -50,7 +58,6 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
 async function getProjectSandbox(projectId: string): Promise<SandboxInstance> {
   const stored = await getProject(projectId);
 
-  // Try to reconnect to existing sandbox (auto-resumes from standby)
   if (stored?.sandbox_id) {
     try {
       console.log(`Reconnecting to sandbox proj-${projectId}...`);
@@ -60,7 +67,6 @@ async function getProjectSandbox(projectId: string): Promise<SandboxInstance> {
     }
   }
 
-  // Create new sandbox
   const template = stored?.template || "blank";
   console.log(`Creating sandbox for project ${projectId} (template: ${template})...`);
   const sandbox = await createSandbox(projectId, template);
@@ -131,7 +137,6 @@ app.post("/api/projects/:id/open", async (req: AuthRequest, res) => {
     const sandbox = await getProjectSandbox(pid);
     const messages = await getProjectMessages(pid);
 
-    // Always get fresh preview URL from live sandbox
     let previewUrl: string | null = null;
     try {
       const preview = await sandbox.previews.createIfNotExists({
@@ -165,16 +170,9 @@ app.post("/api/projects/:id/open", async (req: AuthRequest, res) => {
           await new Promise((r) => setTimeout(r, 5000));
         }
       } catch {
-        // Non-critical — agent can start it manually
+        // Non-critical
       }
     }
-
-    let charCount = 0;
-    for (const m of messages) {
-      charCount += (m.content || "").length;
-      if (m.tool_calls) charCount += JSON.stringify(m.tool_calls).length;
-    }
-    const contextTokens = Math.ceil(charCount / 4);
 
     res.json({
       status: "ready",
@@ -182,8 +180,6 @@ app.post("/api/projects/:id/open", async (req: AuthRequest, res) => {
       previewUrl,
       name: project.name,
       messages,
-      contextTokens,
-      contextLimit: TOKEN_LIMIT,
     });
   } catch (err: any) {
     console.error("Failed to open project sandbox:", err.message);
@@ -213,21 +209,47 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
   res.flushHeaders();
 
   const abortController = new AbortController();
-
-  // Allow client disconnect to abort
   res.on("close", () => abortController.abort());
 
   try {
     const sandbox = await getProjectSandbox(projectId);
 
-    await runAgentStream(sandbox, projectId, message, model || "claude-sonnet", (event) => {
-      if (abortController.signal.aborted) return;
-      if (event.type === "tool_end" && event.tool === "preview_url" && event.output) {
-        const urlMatch = event.output.match(/https?:\/\/[^\s]+/);
-        if (urlMatch) updateProject(projectId, { preview_url: urlMatch[0] });
+    // Load history from DB
+    let history = sanitizeHistory(
+      (await getProjectMessages(projectId)).map(dbRowToLangChain)
+    );
+
+    // Run agent
+    const result = await runAgentStream(
+      sandbox, history, message, model || "claude-sonnet",
+      (event) => {
+        if (abortController.signal.aborted) return;
+        if (event.type === "tool_end" && event.tool === "preview_url" && event.output) {
+          const urlMatch = event.output.match(/https?:\/\/[^\s]+/);
+          if (urlMatch) updateProject(projectId, { preview_url: urlMatch[0] });
+        }
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      },
+      abortController.signal,
+      project.preview_url || undefined,
+    );
+
+    // Persist new messages to DB
+    if (result.newMessages.length > 0) {
+      try {
+        const dbRows = result.newMessages.map((m) => langChainToDbRow(m, projectId));
+        await saveMessages(dbRows);
+        console.log(`[chat ${projectId}] Persisted ${dbRows.length} messages`);
+      } catch (err: any) {
+        console.error(`[chat ${projectId}] Failed to persist:`, err.message);
       }
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    }, abortController.signal);
+    }
+
+    // Collect output files
+    const files = await collectOutputFiles(sandbox);
+    if (files.length > 0) {
+      res.write(`data: ${JSON.stringify({ type: "outputs", files })}\n\n`);
+    }
   } catch (err: any) {
     if (abortController.signal.aborted) {
       res.write(`data: ${JSON.stringify({ type: "error", content: "Aborted" })}\n\n`);
@@ -256,25 +278,8 @@ app.post("/api/projects/:id/clear-chat", async (req: AuthRequest, res) => {
   }
 });
 
-// Compact chat — summarize history to reduce token usage
-app.post("/api/projects/:id/compact", async (req: AuthRequest, res) => {
-  try {
-    const project = await getProject(paramId(req));
-    if (!project || project.user_id !== req.userId) {
-      res.status(404).json({ error: "Project not found" });
-      return;
-    }
-    const result = await compactProjectHistory(paramId(req));
-    res.json({ status: "compacted", ...result });
-  } catch (err: any) {
-    console.error("Compact error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Abort project run — abort via client disconnect (SSE close)
+// Abort project run — handled by client closing SSE connection
 app.post("/api/projects/:id/abort", (_req, res) => {
-  // Abort is now handled by client closing the SSE connection
   res.json({ status: "ok" });
 });
 

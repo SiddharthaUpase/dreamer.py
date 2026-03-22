@@ -48,6 +48,19 @@ function getToolMeta(name: string) {
   return TOOL_META[name] || { icon: <BuildIcon sx={{ fontSize: 11 }} />, label: name, color: "#71717A" };
 }
 
+const MOBILE_DEVICES = [
+  { id: "iphone-16-pro-max", label: "iPhone 16 Pro Max", width: 440, height: 956 },
+  { id: "iphone-16-pro",     label: "iPhone 16 Pro",     width: 402, height: 874 },
+  { id: "iphone-16",         label: "iPhone 16",         width: 393, height: 852 },
+  { id: "iphone-15",         label: "iPhone 15",         width: 393, height: 852 },
+  { id: "iphone-se",         label: "iPhone SE",         width: 320, height: 568 },
+  { id: "galaxy-s25-ultra",  label: "Galaxy S25 Ultra",  width: 412, height: 824 },
+  { id: "galaxy-s25",        label: "Galaxy S25",        width: 360, height: 780 },
+  { id: "galaxy-s24",        label: "Galaxy S24",        width: 360, height: 780 },
+] as const;
+
+type MobileDeviceId = (typeof MOBILE_DEVICES)[number]["id"];
+
 interface Props {
   projectId: string;
 }
@@ -56,6 +69,7 @@ export default function ProjectIDE({ projectId }: Props) {
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const [viewMode, setViewMode] = useState<"mobile" | "desktop">("desktop");
+  const [mobileDevice, setMobileDevice] = useState<MobileDeviceId>("iphone-16-pro");
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -154,37 +168,60 @@ export default function ProjectIDE({ projectId }: Props) {
         </Tooltip>
 
         {/* Mobile / Desktop toggle */}
-        <Box sx={{ display: "flex", bgcolor: "#F4F4F5", borderRadius: 1.5, p: 0.4, gap: 0.25 }}>
-          <Tooltip title="Mobile view">
-            <IconButton
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+          <Box sx={{ display: "flex", bgcolor: "#F4F4F5", borderRadius: 1.5, p: 0.4, gap: 0.25 }}>
+            <Tooltip title="Mobile view">
+              <IconButton
+                size="small"
+                onClick={() => setViewMode("mobile")}
+                sx={{
+                  width: 26, height: 26, borderRadius: 1,
+                  color: viewMode === "mobile" ? "primary.main" : "text.secondary",
+                  bgcolor: viewMode === "mobile" ? "background.paper" : "transparent",
+                  boxShadow: viewMode === "mobile" ? "0 1px 3px rgb(0 0 0 / 0.1)" : "none",
+                  transition: "all 0.12s",
+                }}
+              >
+                <SmartphoneIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Desktop view">
+              <IconButton
+                size="small"
+                onClick={() => setViewMode("desktop")}
+                sx={{
+                  width: 26, height: 26, borderRadius: 1,
+                  color: viewMode === "desktop" ? "primary.main" : "text.secondary",
+                  bgcolor: viewMode === "desktop" ? "background.paper" : "transparent",
+                  boxShadow: viewMode === "desktop" ? "0 1px 3px rgb(0 0 0 / 0.1)" : "none",
+                  transition: "all 0.12s",
+                }}
+              >
+                <DesktopWindowsIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+
+          {/* Device picker — visible only in mobile mode */}
+          {viewMode === "mobile" && (
+            <Select
               size="small"
-              onClick={() => setViewMode("mobile")}
+              value={mobileDevice}
+              onChange={(e) => setMobileDevice(e.target.value as MobileDeviceId)}
               sx={{
-                width: 26, height: 26, borderRadius: 1,
-                color: viewMode === "mobile" ? "primary.main" : "text.secondary",
-                bgcolor: viewMode === "mobile" ? "background.paper" : "transparent",
-                boxShadow: viewMode === "mobile" ? "0 1px 3px rgb(0 0 0 / 0.1)" : "none",
-                transition: "all 0.12s",
+                fontSize: "0.68rem",
+                height: 26,
+                "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" },
+                "& .MuiSelect-select": { py: 0, px: 1 },
               }}
             >
-              <SmartphoneIcon sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Desktop view">
-            <IconButton
-              size="small"
-              onClick={() => setViewMode("desktop")}
-              sx={{
-                width: 26, height: 26, borderRadius: 1,
-                color: viewMode === "desktop" ? "primary.main" : "text.secondary",
-                bgcolor: viewMode === "desktop" ? "background.paper" : "transparent",
-                boxShadow: viewMode === "desktop" ? "0 1px 3px rgb(0 0 0 / 0.1)" : "none",
-                transition: "all 0.12s",
-              }}
-            >
-              <DesktopWindowsIcon sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Tooltip>
+              {MOBILE_DEVICES.map((d) => (
+                <MenuItem key={d.id} value={d.id} sx={{ fontSize: "0.72rem" }}>
+                  {d.label} <Typography component="span" sx={{ color: "text.secondary", fontSize: "0.62rem", ml: 0.75 }}>{d.width}×{d.height}</Typography>
+                </MenuItem>
+              ))}
+            </Select>
+          )}
         </Box>
 
         <Tooltip title={expanded ? "Direct mode" : "Expanded mode"}>
@@ -215,7 +252,7 @@ export default function ProjectIDE({ projectId }: Props) {
                 p: 3,
               }}
             >
-              <IframeFrame iframeRef={iframeRef} previewUrl={previewUrl} iframeKey={iframeKey} viewMode={viewMode} wide />
+              <IframeFrame iframeRef={iframeRef} previewUrl={previewUrl} iframeKey={iframeKey} viewMode={viewMode} mobileDevice={mobileDevice} wide />
             </Box>
 
             {/* Chat panel */}
@@ -265,7 +302,7 @@ export default function ProjectIDE({ projectId }: Props) {
                 overflow: "hidden",
               }}
             >
-              <IframeFrame iframeRef={iframeRef} previewUrl={previewUrl} iframeKey={iframeKey} viewMode={viewMode} />
+              <IframeFrame iframeRef={iframeRef} previewUrl={previewUrl} iframeKey={iframeKey} viewMode={viewMode} mobileDevice={mobileDevice} />
 
               {/* Tool calls overlay — floats above iframe bottom, max 3, older ones faded */}
               {loading && toolActivities.length > 0 && (
@@ -416,32 +453,35 @@ function LoadingScreen({ message, error = false }: { message: string; error?: bo
   );
 }
 
-const VIEW_DIMENSIONS = {
-  mobile:  { width: 390,    maxWidth: 390,  maxHeight: 720  },
-  desktop: { width: "100%", maxWidth: 1024, maxHeight: "100%" },
-};
-
 function IframeFrame({
   iframeRef,
   previewUrl,
   iframeKey,
   viewMode,
+  mobileDevice,
   wide = false,
 }: {
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
   previewUrl: string | null;
   iframeKey: number;
   viewMode: "mobile" | "desktop";
+  mobileDevice?: MobileDeviceId;
   wide?: boolean;
 }) {
-  const dim = VIEW_DIMENSIONS[viewMode];
+  const device = viewMode === "mobile"
+    ? MOBILE_DEVICES.find((d) => d.id === mobileDevice) || MOBILE_DEVICES[0]
+    : null;
+  const frameWidth = device ? device.width : "100%";
+  const frameMaxWidth = device ? device.width : "100%";
+  const frameMaxHeight = device ? device.height : "100%";
+
   return (
     <Box
       sx={{
-        width: viewMode === "mobile" ? 390 : "100%",
-        maxWidth: viewMode === "mobile" ? 390 : "100%",
+        width: frameWidth,
+        maxWidth: frameMaxWidth,
         height: "100%",
-        maxHeight: viewMode === "mobile" ? 720 : "100%",
+        maxHeight: frameMaxHeight,
         bgcolor: "background.paper",
         borderRadius: 3,
         overflow: "hidden",

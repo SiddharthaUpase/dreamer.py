@@ -1,5 +1,7 @@
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { task, entrypoint, addMessages } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
+import * as fsNode from "fs";
+import * as pathNode from "path";
 import {
   SystemMessage,
   HumanMessage,
@@ -7,19 +9,14 @@ import {
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
+import type { ToolCall } from "@langchain/core/messages/tool";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { SandboxInstance } from "@blaxel/core";
-import { createTools } from "./tools.js";
-import {
-  getProjectMessages,
-  saveMessages,
-  deleteProjectMessages,
-  type StoredMessage,
-} from "../services/projectStore.js";
+import { createTools, isImagePath, isPdfPath, getMimeType, type TodoItem, type DatabaseConfig, type SubagentConfig } from "./tools.js";
+export type { DatabaseConfig } from "./tools.js";
+import type { StoredMessage } from "../services/projectStore.js";
 
 // Injects cache_control into the request body for Anthropic prompt caching via OpenRouter.
-// LangChain's ChatOpenAI uses the openai SDK which rejects unknown top-level params,
-// so we inject it at the HTTP layer before the request is sent.
 function createCachingFetch(): typeof globalThis.fetch {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.body && typeof init.body === "string") {
@@ -57,7 +54,7 @@ const anthropicConfig = {
   },
 };
 
-const AVAILABLE_MODELS: Record<string, () => BaseChatModel> = {
+export const AVAILABLE_MODELS: Record<string, () => BaseChatModel> = {
   "claude-sonnet": () =>
     new ChatOpenAI({
       ...anthropicConfig,
@@ -78,74 +75,31 @@ const AVAILABLE_MODELS: Record<string, () => BaseChatModel> = {
       ...openRouterConfig,
       model: "moonshotai/kimi-k2.5",
     }),
+  "mimo": () =>
+    new ChatOpenAI({
+      ...openRouterConfig,
+      model: "xiaomi/mimo-v2-pro",
+    }),
 };
 
 export const MODEL_LIST = Object.keys(AVAILABLE_MODELS);
 
-const SYSTEM_PROMPT = `You are an expert coding agent with access to a sandboxed cloud environment. You help users with software engineering tasks including solving bugs, building features, refactoring code, and running applications.
+// ===== Modular system prompt =====
+const PROMPTS_DIR = pathNode.join(pathNode.dirname(new URL(import.meta.url).pathname), "prompts");
+const PROMPT_FILES = ["core", "workflow", "tools", "sandbox", "skills", "response"];
 
-The working directory is /app. Always use absolute paths. The project files live in /app.
+function loadSystemPrompt(): string {
+  const parts: string[] = [];
+  for (const name of PROMPT_FILES) {
+    try {
+      const content = fsNode.readFileSync(pathNode.join(PROMPTS_DIR, `${name}.md`), "utf8").trim();
+      if (content) parts.push(content);
+    } catch { /* prompt file not found, skip */ }
+  }
+  return parts.join("\n\n");
+}
 
-# Tone and Style
-- Be concise and direct. Minimize output — get to the point quickly.
-- Do NOT add unnecessary preamble ("Sure!", "Great question!") or postamble ("Let me know if you need anything else!").
-- When you run commands, share the relevant output.
-- Prioritize technical accuracy over validation. Disagree when necessary.
-
-# Doing Tasks
-Follow this workflow for software engineering tasks:
-1. **Understand**: Use read, grep, and glob to understand the codebase before making changes. NEVER guess at code structure — always verify first.
-2. **Plan**: Break down complex tasks into steps. For large tasks, explain your plan before starting.
-3. **Implement**: Make changes using the appropriate tools. Follow existing code conventions and style.
-4. **Verify**: After making changes, verify they work (run builds, tests, linters if available).
-
-# Tool Usage Policy — CRITICAL
-
-You have specialized tools for file operations. Using the RIGHT tool is essential for reliability:
-
-- **read**: Read files. ALWAYS read a file before editing it. Use offset/limit for large files.
-- **write**: Create or overwrite files. ALWAYS read the file first if it already exists.
-- **edit**: Make surgical edits to files. The old_string must EXACTLY match the file content (including indentation and whitespace). If the edit fails because old_string was not found, re-read the file to get the exact current content and try again. Prefer edit over write when modifying existing files — it is safer and preserves the rest of the file.
-- **bash**: Execute shell commands (git, npm, pip, docker, curl, etc.). Do NOT use bash for file operations — use the dedicated tools instead. Avoid using cat, head, tail, sed, awk, or echo for reading/writing/editing files.
-- **grep**: Search file contents using regex patterns. Returns matching lines with file paths and line numbers. Use the include parameter to filter by file type (e.g., "*.ts").
-- **glob**: Find files by name pattern. Returns matching file paths. Use this to locate files before reading them.
-
-IMPORTANT rules:
-- ALWAYS read a file before editing or overwriting it. Never guess at file contents.
-- When using the edit tool, copy the old_string EXACTLY from the read output — preserve all indentation, whitespace, and newlines precisely. The line number prefix format from read is: line_number + tab + content. Never include line numbers in old_string or new_string.
-- If an edit fails with "Could not find the specified text", re-read the file to see the actual current content, then retry with the corrected old_string.
-- Prefer edit over write for modifying existing files. Only use write when creating new files or when you need to completely replace a file's content.
-- When searching the codebase, use grep for content search and glob for finding files by name. Do NOT use bash find or bash grep.
-- You can call multiple tools in a single response. If the calls are independent, make them in parallel for efficiency.
-
-# Server & Preview Management
-For running servers or long-running processes:
-- Use the start_server tool instead of bash. It runs the command in the background and waits until the server is ready.
-- Servers MUST bind to 0.0.0.0 (not localhost/127.0.0.1) for preview URLs to work.
-- For Next.js: npm run dev -- --port 3000
-- For Express/Node: app.listen(port, '0.0.0.0')
-- For Python: use --host 0.0.0.0
-- After the server is ready, use preview_url to get a public URL the user can open in their browser.
-- Use check_server to check logs of a running server, and stop_server to stop it.
-- ALWAYS call preview_url after starting a server so the user gets a clickable link.
-
-# Code Quality
-- Follow existing code conventions — check the surrounding code before making changes.
-- Do NOT add comments unless the logic is genuinely non-obvious. Never add comments like "// Import X" or "// Define variable".
-- Keep changes minimal and focused. Do not refactor unrelated code.
-- Use proper error handling at system boundaries.
-
-# File Delivery — /app/outputs
-When the user asks you to produce, generate, export, or "give" them a file (code, HTML, images, configs, etc.), **copy** the file to \`/app/outputs/\` so it can be delivered to the user's browser for download.
-- The outputs folder is created automatically before each run.
-- Always **copy** (not move) — keep the original file in place.
-- Use: \`cp /path/to/file /app/outputs/\`
-- At the end of the task, briefly mention which files were placed in outputs so the user knows what to expect.
-
-# Response Format — CRITICAL
-You MUST always end your turn with a text response to the user. NEVER end on a tool call without a follow-up message. After using tools, always provide a brief summary of what you did and the outcome. Even if the task is simple (e.g., a single file write), confirm what was done in plain text.`;
-
-export const TOKEN_LIMIT = 150_000;
+const SYSTEM_PROMPT = loadSystemPrompt();
 
 export interface OutputFile {
   name: string;
@@ -155,17 +109,32 @@ export interface OutputFile {
 }
 
 export interface ToolEvent {
-  type: "tool_start" | "tool_end" | "result" | "error" | "outputs";
+  type: "tool_start" | "tool_end" | "result" | "error" | "outputs" | "token" | "todo_update" | "subagent_log";
   tool?: string;
   args?: Record<string, unknown>;
   output?: string;
   content?: string;
   files?: OutputFile[];
+  todos?: TodoItem[];
   contextTokens?: number;
   contextLimit?: number;
+  // subagent_log fields
+  label?: string;
+  detail?: string;
 }
 
-function estimateTokens(messages: BaseMessage[]): number {
+export interface AgentResult {
+  newMessages: BaseMessage[];
+  lastContent: string;
+  contextTokens: number;
+  aborted?: boolean;
+  /** If pre-run compaction occurred, this contains the full replacement history (compacted + new messages). When set, the caller should replace its history with this instead of appending newMessages. */
+  compactedHistory?: BaseMessage[];
+}
+
+// ===== Utilities (exported for Express server) =====
+
+export function estimateTokens(messages: BaseMessage[], overheadTokens = 0): number {
   let chars = 0;
   for (const msg of messages) {
     if (typeof msg.content === "string") {
@@ -182,114 +151,206 @@ function estimateTokens(messages: BaseMessage[]): number {
       chars += JSON.stringify(additional.tool_calls).length;
     }
   }
-  return Math.ceil(chars / 4);
+  return Math.ceil(chars / 2.7) + overheadTokens;
 }
 
-function serializeHistoryForSummary(messages: BaseMessage[]): string {
-  const parts: string[] = [];
+export async function compactHistory(messages: BaseMessage[]): Promise<{ human: string; ai: string }> {
+  // Build a plain-text transcript of the conversation
+  const lines: string[] = [];
+
+  // Extract the last todo state from todowrite tool calls
+  let lastTodoState: string | null = null;
   for (const msg of messages) {
+    // Look for AI messages with todowrite tool calls
+    if (msg instanceof AIMessage && msg.tool_calls?.length) {
+      for (const tc of msg.tool_calls) {
+        if (tc.name === "todowrite" && tc.args?.todos) {
+          lastTodoState = JSON.stringify(tc.args.todos, null, 2);
+        }
+      }
+    }
+
     const content = typeof msg.content === "string"
       ? msg.content
       : Array.isArray(msg.content)
-        ? msg.content.map((b: any) => b.text || JSON.stringify(b)).join("")
-        : JSON.stringify(msg.content);
+        ? msg.content.map((b: any) => b.text || "").filter(Boolean).join("")
+        : "";
+    if (!content) continue;
 
     if (msg instanceof HumanMessage) {
-      parts.push(`[USER]: ${content}`);
+      lines.push(`User: ${content}`);
     } else if (msg instanceof AIMessage) {
-      const toolCalls = msg.additional_kwargs?.tool_calls;
-      if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
-        const calls = toolCalls.map((tc: any) =>
-          `  tool: ${tc.function?.name || "unknown"}, args: ${tc.function?.arguments || "{}"}`
-        ).join("\n");
-        parts.push(`[ASSISTANT (tool_calls)]:\n${calls}`);
-      }
-      if (content) {
-        parts.push(`[ASSISTANT]: ${content}`);
-      }
+      lines.push(`Assistant: ${content}`);
     } else if (msg instanceof ToolMessage) {
-      parts.push(`[TOOL RESULT (${msg.name || "unknown"})]: ${content}`);
+      // skip tool messages — the AI responses already capture the outcomes
     }
   }
-  return parts.join("\n\n");
-}
 
-async function compactHistory(messages: BaseMessage[]): Promise<BaseMessage[]> {
-  const serialized = serializeHistoryForSummary(messages);
+  const transcript = lines.join("\n\n");
 
-  const compactionModel = new ChatOpenAI({
-    ...openRouterConfig,
-    model: "openai/gpt-4.1-mini",
-    temperature: 0,
+  const haiku = new ChatOpenAI({
+    ...anthropicConfig,
+    model: "anthropic/claude-haiku-4.5",
     streaming: false,
   });
 
-  const summaryResponse = await compactionModel.invoke([
+  const result = await haiku.invoke([
     new SystemMessage(
-      `You are a conversation summarizer for a coding agent. Produce a detailed summary of the conversation below. Include:
-
-1. **User requests**: What the user asked for, in order
-2. **Actions taken**: What files were created, modified, or deleted. What commands were run.
-3. **Tool calls**: Key tool calls made (tool name, what it did, important outputs)
-4. **Current project state**: What exists now — files, running servers, installed packages, project structure
-5. **Important context**: Any decisions made, errors encountered and how they were resolved, configurations set up
-6. **Preview URLs**: Any active preview URLs or server ports
-
-Be thorough and specific — include file paths, port numbers, package names. This summary will be used as the only context for continuing the conversation.`
+      "You are a conversation compactor. Given a transcript of a user-assistant coding conversation, produce a concise summary that preserves all important context:\n" +
+      "- What the user asked for (goals, requirements, preferences)\n" +
+      "- What was built/changed (files modified, key decisions, architecture)\n" +
+      "- Current state of the project (what works, what's pending, any known issues)\n" +
+      "- Any user preferences or corrections expressed during the conversation\n\n" +
+      "Output TWO sections separated by '---SPLIT---':\n" +
+      "1. A summary written as if the user is reminding the assistant of prior context (first person: 'I asked you to...', 'We built...')\n" +
+      "2. A summary written as the assistant acknowledging the context (first person: 'I helped you...', 'We implemented...')\n\n" +
+      "Be concise but don't lose important details. Skip pleasantries."
     ),
-    new HumanMessage(serialized),
+    new HumanMessage(`Here is the conversation transcript to compact:\n\n${transcript}`),
   ]);
 
-  const summary = typeof summaryResponse.content === "string"
-    ? summaryResponse.content
-    : (summaryResponse.content as any[]).map((b: any) => b.text || "").join("");
+  const output = typeof result.content === "string" ? result.content : "";
+  const parts = output.split("---SPLIT---");
+  const humanSummary = (parts[0] || "").trim();
+  let aiSummary = (parts[1] || output).trim();
 
-  console.log(`[compaction] Compacted ${messages.length} messages (${estimateTokens(messages)} tokens) → summary (${Math.ceil(summary.length / 4)} tokens)`);
-
-  return [
-    new HumanMessage("Continue from previous context:"),
-    new AIMessage(`## Previous Conversation Context\n\n${summary}`),
-  ];
-}
-
-// ===== Exported helpers for API endpoints =====
-
-export async function compactProjectHistory(projectId: string): Promise<{ tokens: number; limit: number }> {
-  const dbMessages = await getProjectMessages(projectId);
-  if (dbMessages.length === 0) {
-    return { tokens: 0, limit: TOKEN_LIMIT };
+  // Append the last todo state so the agent can continue tracking progress
+  if (lastTodoState) {
+    aiSummary += `\n\n## Current Task List\nHere is the exact todo state from before compaction. Use the todowrite tool to restore this list and continue from where you left off:\n\`\`\`json\n${lastTodoState}\n\`\`\``;
   }
 
-  const history = dbMessages.map(dbRowToLangChain);
-  const compacted = await compactHistory(history);
-
-  // Replace DB messages with compacted version
-
-  await deleteProjectMessages(projectId);
-  await saveMessages(compacted.map((m) => langChainToDbRow(m, projectId)));
-
-  return { tokens: estimateTokens(compacted), limit: TOKEN_LIMIT };
+  return { human: humanSummary, ai: aiSummary };
 }
 
-export async function getProjectContextInfo(projectId: string): Promise<{ tokens: number; limit: number }> {
-  const dbMessages = await getProjectMessages(projectId);
-  const history = dbMessages.map(dbRowToLangChain);
-  return { tokens: estimateTokens(history), limit: TOKEN_LIMIT };
+export function dbRowToLangChain(row: StoredMessage): BaseMessage {
+  if (row.role === "human") {
+    return new HumanMessage(row.content);
+  }
+  if (row.role === "tool") {
+    return new ToolMessage({
+      content: row.content,
+      tool_call_id: row.tool_call_id || "",
+      name: row.name || undefined,
+    });
+  }
+  if (row.tool_calls?.length) {
+    const toolCalls = row.tool_calls.map((tc: any) => ({
+      name: tc.name,
+      args: typeof tc.args === "string" ? JSON.parse(tc.args) : tc.args || {},
+      id: tc.id,
+      type: "tool_call" as const,
+    }));
+    return new AIMessage({
+      content: row.content,
+      tool_calls: toolCalls,
+      additional_kwargs: {
+        tool_calls: toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function" as const,
+          function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+        })),
+      },
+    });
+  }
+  return new AIMessage(row.content);
 }
+
+export function langChainToDbRow(msg: BaseMessage, projectId: string): Omit<StoredMessage, "id" | "created_at"> {
+  const content = typeof msg.content === "string"
+    ? msg.content
+    : Array.isArray(msg.content)
+      ? msg.content.map((b: any) => b.text || JSON.stringify(b)).join("")
+      : JSON.stringify(msg.content);
+
+  if (msg instanceof HumanMessage) {
+    return { project_id: projectId, role: "human", content, tool_calls: null, tool_call_id: null, name: null };
+  }
+
+  if (msg instanceof ToolMessage) {
+    return {
+      project_id: projectId,
+      role: "tool",
+      content,
+      tool_calls: null,
+      tool_call_id: msg.tool_call_id || null,
+      name: msg.name || null,
+    };
+  }
+
+  const aiMsg = msg as AIMessage;
+  let toolCalls: any[] | null = null;
+  if (aiMsg.tool_calls?.length) {
+    toolCalls = aiMsg.tool_calls.map((tc) => ({ name: tc.name, args: tc.args, id: tc.id }));
+  }
+  return { project_id: projectId, role: "ai", content, tool_calls: toolCalls, tool_call_id: null, name: null };
+}
+
+export function sanitizeHistory(messages: BaseMessage[]): BaseMessage[] {
+  if (messages.length === 0) return [];
+
+  const result: BaseMessage[] = [];
+
+  let start = 0;
+  while (start < messages.length && !(messages[start] instanceof HumanMessage)) {
+    start++;
+  }
+
+  for (let i = start; i < messages.length; i++) {
+    const msg = messages[i];
+
+    if (msg instanceof ToolMessage) {
+      const prev = result[result.length - 1];
+      if (prev instanceof AIMessage && prev.tool_calls?.some(tc => tc.id === msg.tool_call_id)) {
+        result.push(msg);
+      }
+    } else if (msg instanceof AIMessage) {
+      result.push(msg);
+    } else if (msg instanceof HumanMessage) {
+      result.push(msg);
+    }
+  }
+
+  while (result.length > 0) {
+    const last = result[result.length - 1];
+
+    if (last instanceof ToolMessage) break;
+
+    if (last instanceof AIMessage && last.tool_calls?.length) {
+      const aiIndex = result.length - 1;
+      const expectedIds = new Set(last.tool_calls.map(tc => tc.id));
+      const foundIds = new Set<string>();
+      for (let j = aiIndex + 1; j < result.length; j++) {
+        const m = result[j];
+        if (m instanceof ToolMessage && m.tool_call_id) {
+          foundIds.add(m.tool_call_id);
+        }
+      }
+      if (foundIds.size < expectedIds.size) {
+        result.splice(aiIndex);
+        continue;
+      }
+      break;
+    }
+
+    break;
+  }
+
+  return result;
+}
+
+// ===== Context assembly =====
 
 const DIR_FILE_CAP = 30;
 const IGNORED_DIRS = ["node_modules", "dist", "build", "coverage", "out", ".turbo"];
 
 async function getRunningServerContext(sandbox: SandboxInstance): Promise<string> {
   try {
-    // Check which ports are listening
     const portResult = await sandbox.process.exec({
       command: `ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || echo "no port info"`,
       waitForCompletion: true,
     });
     const portOutput = (portResult.stdout || "").trim();
 
-    // Extract listening ports (exclude sandbox-api on 8080)
     const listeningPorts: { port: number; process: string }[] = [];
     for (const line of portOutput.split("\n")) {
       const portMatch = line.match(/:(\d+)\s/);
@@ -302,7 +363,6 @@ async function getRunningServerContext(sandbox: SandboxInstance): Promise<string
       }
     }
 
-    // Check known server process names
     const knownServers = ["dev-server"];
     const runningServers: { name: string; status: string; command: string }[] = [];
     for (const name of knownServers) {
@@ -352,7 +412,6 @@ async function getFileTree(sandbox: SandboxInstance): Promise<string> {
     const paths = (result.stdout || "").split("\n").map((p) => p.trim()).filter(Boolean);
     if (paths.length === 0) return "";
 
-    // Build a nested tree structure
     const root: Record<string, any> = {};
     for (const p of paths) {
       const rel = p.replace("/app/", "");
@@ -362,13 +421,11 @@ async function getFileTree(sandbox: SandboxInstance): Promise<string> {
         if (!node[parts[i]]) node[parts[i]] = {};
         node = node[parts[i]];
       }
-      node[parts[parts.length - 1]] = null; // null = file
+      node[parts[parts.length - 1]] = null;
     }
 
-    // Render as markdown tree with box-drawing chars
     function renderTree(node: Record<string, any>, prefix: string): string[] {
       const entries = Object.keys(node).sort((a, b) => {
-        // Directories first, then files
         const aIsDir = node[a] !== null;
         const bIsDir = node[b] !== null;
         if (aIsDir && !bIsDir) return -1;
@@ -386,7 +443,6 @@ async function getFileTree(sandbox: SandboxInstance): Promise<string> {
         const childPrefix = isLast ? "    " : "│   ";
 
         if (node[name] === null) {
-          // File
           fileCount++;
           if (fileCount <= DIR_FILE_CAP) {
             lines.push(`${prefix}${connector}${name}`);
@@ -396,7 +452,6 @@ async function getFileTree(sandbox: SandboxInstance): Promise<string> {
             break;
           }
         } else {
-          // Directory
           lines.push(`${prefix}${connector}${name}/`);
           lines.push(...renderTree(node[name], prefix + childPrefix));
         }
@@ -411,290 +466,9 @@ async function getFileTree(sandbox: SandboxInstance): Promise<string> {
   }
 }
 
-// ===== DB <-> LangChain message conversion =====
+// ===== Output file collection =====
 
-function dbRowToLangChain(row: StoredMessage): BaseMessage {
-  if (row.role === "human") {
-    return new HumanMessage(row.content);
-  }
-  if (row.role === "tool") {
-    return new ToolMessage({
-      content: row.content,
-      tool_call_id: row.tool_call_id || "",
-      name: row.name || undefined,
-    });
-  }
-  // ai — use constructor to properly initialize both tool_calls and additional_kwargs
-  if (row.tool_calls?.length) {
-    const toolCalls = row.tool_calls.map((tc: any) => ({
-      name: tc.name,
-      args: typeof tc.args === "string" ? JSON.parse(tc.args) : tc.args || {},
-      id: tc.id,
-      type: "tool_call" as const,
-    }));
-    return new AIMessage({
-      content: row.content,
-      tool_calls: toolCalls,
-      additional_kwargs: {
-        tool_calls: toolCalls.map((tc) => ({
-          id: tc.id,
-          type: "function" as const,
-          function: { name: tc.name, arguments: JSON.stringify(tc.args) },
-        })),
-      },
-    });
-  }
-  return new AIMessage(row.content);
-}
-
-function langChainToDbRow(msg: BaseMessage, projectId: string): Omit<StoredMessage, "id" | "created_at"> {
-  const content = typeof msg.content === "string"
-    ? msg.content
-    : Array.isArray(msg.content)
-      ? msg.content.map((b: any) => b.text || JSON.stringify(b)).join("")
-      : JSON.stringify(msg.content);
-
-  if (msg instanceof HumanMessage) {
-    return { project_id: projectId, role: "human", content, tool_calls: null, tool_call_id: null, name: null };
-  }
-
-  if (msg instanceof ToolMessage) {
-    return {
-      project_id: projectId,
-      role: "tool",
-      content,
-      tool_calls: null,
-      tool_call_id: msg.tool_call_id || null,
-      name: msg.name || null,
-    };
-  }
-
-  // AIMessage
-  const aiMsg = msg as AIMessage;
-  let toolCalls: any[] | null = null;
-  if (aiMsg.tool_calls?.length) {
-    toolCalls = aiMsg.tool_calls.map((tc) => ({ name: tc.name, args: tc.args, id: tc.id }));
-  }
-  return { project_id: projectId, role: "ai", content, tool_calls: toolCalls, tool_call_id: null, name: null };
-}
-
-
-// ===== History sanitization =====
-// Ensures message history is valid for the LLM API.
-// Fixes issues from aborted requests, crashes, or partial saves.
-
-function sanitizeHistory(messages: BaseMessage[]): BaseMessage[] {
-  if (messages.length === 0) return [];
-
-  const result: BaseMessage[] = [];
-
-  // 1. Skip leading non-human messages
-  let start = 0;
-  while (start < messages.length && !(messages[start] instanceof HumanMessage)) {
-    start++;
-  }
-
-  for (let i = start; i < messages.length; i++) {
-    const msg = messages[i];
-
-    if (msg instanceof ToolMessage) {
-      // Only include tool messages if the previous message in result is an AI with matching tool_calls
-      const prev = result[result.length - 1];
-      if (prev instanceof AIMessage && prev.tool_calls?.some(tc => tc.id === msg.tool_call_id)) {
-        result.push(msg);
-      }
-      // Otherwise skip orphaned tool messages
-    } else if (msg instanceof AIMessage) {
-      result.push(msg);
-    } else if (msg instanceof HumanMessage) {
-      result.push(msg);
-    }
-  }
-
-  // 2. Trim trailing incomplete tool call sequences
-  // If the last AI message has tool_calls, check all tool_calls have matching tool messages after it
-  while (result.length > 0) {
-    const last = result[result.length - 1];
-
-    if (last instanceof ToolMessage) {
-      // Tool message at end is fine (it's a response)
-      break;
-    }
-
-    if (last instanceof AIMessage && last.tool_calls?.length) {
-      // AI with tool_calls at the end — check if all tool_calls have responses
-      const aiIndex = result.length - 1;
-      const expectedIds = new Set(last.tool_calls.map(tc => tc.id));
-      const foundIds = new Set<string>();
-      for (let j = aiIndex + 1; j < result.length; j++) {
-        const m = result[j];
-        if (m instanceof ToolMessage && m.tool_call_id) {
-          foundIds.add(m.tool_call_id);
-        }
-      }
-      if (foundIds.size < expectedIds.size) {
-        // Incomplete — remove this AI message and any tool messages after it
-        result.splice(aiIndex);
-        continue;
-      }
-      break;
-    }
-
-    break;
-  }
-
-  // 3. Don't end on a trailing human message with no response (it'll be re-sent)
-  // Actually this is fine — the current user message will be appended after
-
-  return result;
-}
-
-// ===== Main agent runner =====
-
-export async function runAgentStream(
-  sandbox: SandboxInstance,
-  projectId: string,
-  prompt: string,
-  modelId: string,
-  onEvent: (event: ToolEvent) => void,
-  signal?: AbortSignal,
-) {
-  const createModel = AVAILABLE_MODELS[modelId] || AVAILABLE_MODELS["claude-sonnet"];
-  const model = createModel();
-  const tools = createTools(sandbox);
-
-  await sandbox.process.exec({ command: "mkdir -p /app/outputs", waitForCompletion: true });
-
-  const [fileTree, serverContext] = await Promise.all([
-    getFileTree(sandbox),
-    getRunningServerContext(sandbox),
-  ]);
-
-  let systemPromptText = SYSTEM_PROMPT;
-  if (serverContext) systemPromptText += `\n\n${serverContext}`;
-  if (fileTree) systemPromptText += `\n\n${fileTree}`;
-
-  const agent = createReactAgent({
-    llm: model,
-    tools,
-    messageModifier: new SystemMessage(systemPromptText),
-  });
-
-  // Load history from DB
-  let history: BaseMessage[] = [];
-  try {
-    const dbMessages = await getProjectMessages(projectId);
-    if (dbMessages.length > 0) {
-      history = sanitizeHistory(dbMessages.map(dbRowToLangChain));
-      console.log(`[agent ${projectId}] Loaded ${dbMessages.length} messages from DB, ${history.length} after sanitization`);
-    }
-  } catch (err: any) {
-    console.error(`[agent ${projectId}] Failed to load history from DB:`, err.message);
-  }
-
-  // Auto-compact if needed
-  const tokenCount = estimateTokens(history);
-  if (tokenCount >= TOKEN_LIMIT) {
-    console.log(`[agent ${projectId}] History at ${tokenCount} tokens, auto-compacting...`);
-    history = await compactHistory(history);
-    // Replace DB messages with compacted version
-  
-    await deleteProjectMessages(projectId);
-    await saveMessages(history.map((m) => langChainToDbRow(m, projectId)));
-  }
-
-  const userMsg = new HumanMessage(prompt);
-  const inputMessages = [...history, userMsg];
-
-  const stream = await agent.streamEvents(
-    { messages: inputMessages },
-    { version: "v2", recursionLimit: 50, signal }
-  );
-
-  let lastContent = "";
-  let allNewMessages: BaseMessage[] = [];
-  // Running token estimate: start from input context
-  let runningTokens = estimateTokens(inputMessages);
-
-  for await (const event of stream) {
-    if (signal?.aborted) break;
-
-    if (event.event === "on_tool_start") {
-      const argsStr = event.data?.input ? JSON.stringify(event.data.input) : "";
-      runningTokens += Math.ceil(argsStr.length / 4);
-      onEvent({
-        type: "tool_start",
-        tool: event.name,
-        args: event.data?.input,
-        contextTokens: runningTokens,
-        contextLimit: TOKEN_LIMIT,
-      });
-    } else if (event.event === "on_tool_end") {
-      const output = event.data?.output;
-      const text = typeof output === "string" ? output : output?.content ?? "";
-      const outputStr = typeof text === "string" ? text : "";
-      runningTokens += Math.ceil(outputStr.length / 4);
-      const limit = event.name === "preview_url" ? 500 : 200;
-      onEvent({
-        type: "tool_end",
-        tool: event.name,
-        output: outputStr.slice(0, limit),
-        contextTokens: runningTokens,
-        contextLimit: TOKEN_LIMIT,
-      });
-    } else if (event.event === "on_chain_end" && event.name === "LangGraph") {
-      const output = event.data?.output;
-      if (output?.messages) {
-        allNewMessages = output.messages;
-      }
-    } else if (event.event === "on_chat_model_end") {
-      const msg = event.data?.output;
-      if (msg?.content) {
-        lastContent = typeof msg.content === "string"
-          ? msg.content
-          : msg.content.map((c: any) => c.text || "").join("");
-      }
-    }
-  }
-
-  // Extract only the new messages (skip what we sent as input)
-  const newOnly = allNewMessages.slice(inputMessages.length);
-
-  if (newOnly.length > 0) {
-    // Persist to DB: user message + all new messages from the agent
-    try {
-      const dbRows = [
-        langChainToDbRow(userMsg, projectId),
-        ...newOnly.map((m) => langChainToDbRow(m, projectId)),
-      ];
-      await saveMessages(dbRows);
-      console.log(`[agent ${projectId}] Persisted ${dbRows.length} messages to DB`);
-    } catch (err: any) {
-      console.error(`[agent ${projectId}] Failed to persist messages:`, err.message);
-    }
-  } else if (lastContent) {
-    // Fallback — only save if there's actual content
-    try {
-      await saveMessages([
-        langChainToDbRow(userMsg, projectId),
-        langChainToDbRow(new AIMessage(lastContent), projectId),
-      ]);
-    } catch (err: any) {
-      console.error(`[agent ${projectId}] Failed to persist fallback:`, err.message);
-    }
-  } else {
-    // No response at all — just save the user message so it's not lost
-    try {
-      await saveMessages([langChainToDbRow(userMsg, projectId)]);
-    } catch (err: any) {
-      console.error(`[agent ${projectId}] Failed to persist user message:`, err.message);
-    }
-  }
-
-  const contextTokens = estimateTokens([...history, userMsg, ...newOnly]);
-  onEvent({ type: "result", content: lastContent, contextTokens, contextLimit: TOKEN_LIMIT });
-
-  // Fetch output files
+export async function collectOutputFiles(sandbox: SandboxInstance): Promise<OutputFile[]> {
   try {
     const listResult = await sandbox.process.exec({
       command: "find /app/outputs -type f 2>/dev/null",
@@ -705,37 +479,417 @@ export async function runAgentStream(
       .map((p: string) => p.trim())
       .filter(Boolean);
 
-    if (filePaths.length > 0) {
-      const MAX_FILE_SIZE = 5 * 1024 * 1024;
-      const outputFiles: OutputFile[] = [];
+    if (filePaths.length === 0) return [];
 
-      for (const filePath of filePaths) {
-        const sizeResult = await sandbox.process.exec({
-          command: `stat -c%s "${filePath}" 2>/dev/null || stat -f%z "${filePath}" 2>/dev/null`,
-          waitForCompletion: true,
-        });
-        const size = parseInt((sizeResult.stdout || "0").trim(), 10);
-        if (size > MAX_FILE_SIZE || size === 0) continue;
+    const MAX_FILE_SIZE = 5 * 1024 * 1024;
+    const outputFiles: OutputFile[] = [];
 
-        const b64Result = await sandbox.process.exec({
-          command: `base64 "${filePath}"`,
-          waitForCompletion: true,
-        });
-        const b64 = (b64Result.stdout || "").trim();
-        if (!b64) continue;
+    for (const filePath of filePaths) {
+      const sizeResult = await sandbox.process.exec({
+        command: `stat -c%s "${filePath}" 2>/dev/null || stat -f%z "${filePath}" 2>/dev/null`,
+        waitForCompletion: true,
+      });
+      const size = parseInt((sizeResult.stdout || "0").trim(), 10);
+      if (size > MAX_FILE_SIZE || size === 0) continue;
 
-        const name = filePath.split("/").pop() || filePath;
-        const relativePath = filePath.replace("/app/outputs/", "");
-        outputFiles.push({ name, path: relativePath, content: b64, size });
-      }
+      const b64Result = await sandbox.process.exec({
+        command: `base64 "${filePath}"`,
+        waitForCompletion: true,
+      });
+      const b64 = (b64Result.stdout || "").trim();
+      if (!b64) continue;
 
-      if (outputFiles.length > 0) {
-        onEvent({ type: "outputs", files: outputFiles });
-      }
-
-      await sandbox.process.exec({ command: "rm -rf /app/outputs/*", waitForCompletion: true });
+      const name = filePath.split("/").pop() || filePath;
+      const relativePath = filePath.replace("/app/outputs/", "");
+      outputFiles.push({ name, path: relativePath, content: b64, size });
     }
+
+    await sandbox.process.exec({ command: "rm -rf /app/outputs/*", waitForCompletion: true });
+    return outputFiles;
   } catch {
-    // Ignore
+    return [];
+  }
+}
+
+// ===== Main agent runner (pure — no DB dependency) =====
+
+const MAX_ITERATIONS = 50;
+const COMPACTION_THRESHOLD = 160_000; // trigger mid-run compaction at 160k estimated tokens
+
+// LangGraph functional API tasks — auto-traced in LangSmith
+const callLlm = task("callLlm", async (params: {
+  modelWithTools: any;
+  systemMsg: SystemMessage;
+  messages: BaseMessage[];
+  signal?: AbortSignal;
+  onEvent: (event: ToolEvent) => void;
+}) => {
+  const { modelWithTools, systemMsg, messages, signal, onEvent } = params;
+
+  const stream = await modelWithTools.stream(
+    [systemMsg, ...messages],
+    { signal }
+  );
+
+  let fullResponse: AIMessage | null = null;
+  let hasToolCalls = false;
+
+  for await (const chunk of stream) {
+    if (signal?.aborted) break;
+
+    if (chunk.tool_call_chunks?.length || chunk.tool_calls?.length) {
+      hasToolCalls = true;
+    }
+
+    if (!hasToolCalls) {
+      const token = typeof chunk.content === "string"
+        ? chunk.content
+        : Array.isArray(chunk.content)
+          ? chunk.content.map((c: any) => c.text || "").join("")
+          : "";
+      if (token) {
+        onEvent({ type: "token", content: token });
+      }
+    }
+
+    if (!fullResponse) {
+      fullResponse = chunk as unknown as AIMessage;
+    } else {
+      fullResponse = (fullResponse as any).concat(chunk) as AIMessage;
+    }
+  }
+
+  return fullResponse;
+});
+
+const callTool = task("callTool", async (params: {
+  toolCall: ToolCall;
+  toolsByName: Record<string, any>;
+  onEvent: (event: ToolEvent) => void;
+  signal?: AbortSignal;
+}): Promise<{ toolMsg: ToolMessage; mediaMsg?: HumanMessage }> => {
+  const { toolCall, toolsByName, onEvent, signal } = params;
+
+  const toolDef = toolsByName[toolCall.name];
+  if (!toolDef) {
+    return {
+      toolMsg: new ToolMessage({
+        content: `Error: Unknown tool "${toolCall.name}"`,
+        tool_call_id: toolCall.id!,
+        name: toolCall.name,
+      }),
+    };
+  }
+
+  if (signal?.aborted) {
+    return {
+      toolMsg: new ToolMessage({
+        content: "Aborted.",
+        tool_call_id: toolCall.id!,
+        name: toolCall.name,
+      }),
+    };
+  }
+
+  onEvent({ type: "tool_start", tool: toolCall.name, args: toolCall.args });
+
+  try {
+    // Race tool execution against abort signal
+    const resultPromise = toolDef.invoke(toolCall);
+    const result = signal
+      ? await Promise.race([
+          resultPromise,
+          new Promise<never>((_, reject) => {
+            if (signal.aborted) reject(new DOMException("Aborted", "AbortError"));
+            signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+          }),
+        ])
+      : await resultPromise;
+    const resultContent = typeof result === "string" ? result : result?.content ?? String(result);
+
+    let toolOutput = resultContent;
+    let mediaMsg: HumanMessage | undefined;
+
+    try {
+      const parsed = JSON.parse(resultContent);
+      if (parsed?.__image) {
+        toolOutput = `[Image: ${parsed.path} (${(parsed.size / 1024).toFixed(1)} KB)]`;
+        if (parsed.extraText) {
+          toolOutput += `\n\n${parsed.extraText}`;
+        }
+        mediaMsg = new HumanMessage({
+          content: [
+            { type: "text", text: `Here is the image from ${parsed.path}:` },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${parsed.mimeType};base64,${parsed.base64}`,
+              },
+            },
+          ],
+        });
+      } else if (parsed?.__pdf) {
+        toolOutput = `[PDF: ${parsed.path} (${(parsed.size / 1024).toFixed(1)} KB)]`;
+        mediaMsg = new HumanMessage({
+          content: [
+            { type: "text", text: `Here is the PDF document from ${parsed.path}:` },
+            {
+              type: "file",
+              file: {
+                filename: parsed.path.split("/").pop() || "document.pdf",
+                file_data: `data:application/pdf;base64,${parsed.base64}`,
+              },
+            } as any,
+          ],
+        });
+      }
+    } catch {
+      // Not JSON, regular tool output
+    }
+
+    onEvent({ type: "tool_end", tool: toolCall.name, output: toolOutput.slice(0, 200) });
+
+    return {
+      toolMsg: new ToolMessage({
+        content: toolOutput,
+        tool_call_id: toolCall.id!,
+        name: toolCall.name,
+      }),
+      mediaMsg,
+    };
+  } catch (err: any) {
+    if (err.name === "AbortError") throw err; // propagate abort up
+    const errMsg = `Error: ${err.message}`;
+    onEvent({ type: "tool_end", tool: toolCall.name, output: errMsg });
+    return {
+      toolMsg: new ToolMessage({
+        content: errMsg,
+        tool_call_id: toolCall.id!,
+        name: toolCall.name,
+      }),
+    };
+  }
+});
+
+export async function runAgentStream(
+  sandbox: SandboxInstance,
+  history: BaseMessage[],
+  prompt: string,
+  modelId: string,
+  onEvent: (event: ToolEvent) => void,
+  signal?: AbortSignal,
+  previewUrl?: string,
+  dbConfig?: DatabaseConfig,
+): Promise<AgentResult> {
+  const createModel = AVAILABLE_MODELS[modelId] || AVAILABLE_MODELS["claude-sonnet"];
+  const model = createModel();
+  const subagentConfig: SubagentConfig = {
+    parentModelId: modelId,
+    modelFactory: AVAILABLE_MODELS,
+    previewUrl,
+    onLog: (label, toolName, detail) => {
+      onEvent({ type: "subagent_log", label, tool: toolName, detail });
+    },
+  };
+  const tools = createTools(sandbox, (todos) => {
+    onEvent({ type: "todo_update", todos });
+  }, dbConfig, subagentConfig);
+  const toolsByName: Record<string, any> = {};
+  for (const t of tools) toolsByName[t.name] = t;
+  const modelWithTools = (model as any).bindTools(tools);
+
+  await sandbox.process.exec({ command: "mkdir -p /app/outputs", waitForCompletion: true });
+
+  const [fileTree, serverContext] = await Promise.all([
+    getFileTree(sandbox),
+    getRunningServerContext(sandbox),
+  ]);
+
+  let systemPromptText = SYSTEM_PROMPT;
+  if (previewUrl) systemPromptText += `\n\n## Sandbox Preview URL\nThe dev server's public preview URL is: ${previewUrl}\nALWAYS use this URL when taking screenshots of the app with url_fetch. Do NOT use localhost or internal sandbox URLs — they are not reachable by external tools.`;
+  if (serverContext) systemPromptText += `\n\n${serverContext}`;
+  if (fileTree) systemPromptText += `\n\n${fileTree}`;
+
+  const systemMsg = new SystemMessage(systemPromptText);
+
+  // Calculate fixed overhead: system prompt + tool schemas (sent with every LLM call but not in messages array)
+  const systemPromptTokens = Math.ceil(systemPromptText.length / 4);
+  const toolSchemaTokens = Math.ceil(tools.reduce((acc, t) => acc + (t.description?.length || 0) + JSON.stringify((t as any).schema?.shape || {}).length, 0) / 4);
+  const overheadTokens = systemPromptTokens + toolSchemaTokens;
+
+  // Track messages outside the entrypoint so we can recover them on abort
+  let inputMessages = [...history, new HumanMessage(prompt)];
+
+  // Pre-run compaction: if history is already too large, compact before starting
+  let didPreRunCompact = false;
+  const preRunTokens = estimateTokens(inputMessages, overheadTokens);
+  if (preRunTokens > COMPACTION_THRESHOLD) {
+    onEvent({ type: "token", content: `\n[Pre-run compaction: ~${Math.round(preRunTokens / 1000)}k tokens → compacting...]\n` });
+    try {
+      const { human, ai } = await compactHistory(inputMessages);
+      inputMessages = [new HumanMessage(human), new AIMessage(ai), new HumanMessage(prompt)];
+      didPreRunCompact = true;
+      const newTokens = estimateTokens(inputMessages, overheadTokens);
+      onEvent({ type: "token", content: `[Compacted: ~${Math.round(preRunTokens / 1000)}k → ~${Math.round(newTokens / 1000)}k tokens]\n` });
+    } catch (compactErr: any) {
+      onEvent({ type: "token", content: `[Pre-run compaction failed: ${compactErr.message} — continuing with full context]\n` });
+    }
+  }
+
+  let capturedMessages: BaseMessage[] = [...inputMessages];
+
+  const agent = entrypoint("agent", async (messages: BaseMessage[]) => {
+    let lastContent = "";
+    let pendingMedia: HumanMessage | null = null;
+
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
+      if (signal?.aborted) break;
+
+      // If there's a pending media message from a previous tool call, prepend it
+      const llmMessages = pendingMedia ? [...messages, pendingMedia] : messages;
+      pendingMedia = null;
+
+      const fullResponse = await callLlm({ modelWithTools, systemMsg, messages: llmMessages, signal, onEvent });
+      if (!fullResponse) break;
+
+      // Extract text content
+      if (fullResponse.content) {
+        lastContent = typeof fullResponse.content === "string"
+          ? fullResponse.content
+          : Array.isArray(fullResponse.content)
+            ? fullResponse.content.map((c: any) => c.text || "").join("")
+            : "";
+      }
+
+      messages = addMessages(messages, [fullResponse]);
+      capturedMessages = [...messages];
+
+      if (!fullResponse.tool_calls?.length) break;
+
+      // Execute tools
+      const results = await Promise.all(
+        fullResponse.tool_calls.map((tc) => callTool({ toolCall: tc, toolsByName, onEvent, signal }))
+      );
+
+      const toolMsgs = results.map((r) => r.toolMsg);
+      const mediaMsgs = results.filter((r) => r.mediaMsg).map((r) => r.mediaMsg!);
+
+      messages = addMessages(messages, toolMsgs);
+      capturedMessages = [...messages];
+
+      // Keep only the latest media message — pass it to the next LLM call
+      // but don't add it to the persisted message history (avoids breaking tool_use pairing)
+      if (mediaMsgs.length > 0) {
+        pendingMedia = mediaMsgs[mediaMsgs.length - 1];
+      }
+
+      // Mid-run compaction: check token usage before next LLM call
+      const currentTokens = estimateTokens(messages, overheadTokens);
+      if (currentTokens > COMPACTION_THRESHOLD) {
+        onEvent({ type: "token", content: `\n[Mid-run compaction: ~${Math.round(currentTokens / 1000)}k tokens → compacting...]\n` });
+        try {
+          const { human, ai } = await compactHistory(messages);
+          // End with a HumanMessage so models that don't support assistant prefill still work
+          messages = [
+            new HumanMessage(human),
+            new AIMessage(ai),
+            new HumanMessage("Continue working on the task. Pick up where you left off. If there is a task list in the context above, restore it with the todowrite tool first, then continue."),
+          ];
+          capturedMessages = [...messages];
+          // Drop pending media — it referenced pre-compaction context
+          pendingMedia = null;
+          const newTokens = estimateTokens(messages, overheadTokens);
+          onEvent({ type: "token", content: `[Compacted: ~${Math.round(currentTokens / 1000)}k → ~${Math.round(newTokens / 1000)}k tokens]\n` });
+        } catch (compactErr: any) {
+          onEvent({ type: "token", content: `[Compaction failed: ${compactErr.message} — continuing with full context]\n` });
+        }
+      }
+    }
+
+    return { messages, lastContent };
+  });
+
+  try {
+    const result = await agent.invoke(inputMessages);
+
+    const startIdx = didPreRunCompact ? 0 : history.length;
+    const newMessages = result.messages.slice(startIdx);
+    const contextTokens = estimateTokens(result.messages, overheadTokens);
+
+    onEvent({ type: "result", content: result.lastContent, contextTokens });
+
+    return {
+      newMessages,
+      lastContent: result.lastContent,
+      contextTokens,
+      ...(didPreRunCompact && { compactedHistory: result.messages }),
+    };
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      // Build partial result from captured messages
+      let partialMessages = capturedMessages.slice(history.length);
+
+      // If the last message is an AI message with tool_calls that have no responses,
+      // add stub ToolMessages so the history remains valid for the LLM
+      const last = partialMessages[partialMessages.length - 1];
+      if (last instanceof AIMessage && last.tool_calls?.length) {
+        const answeredIds = new Set(
+          partialMessages
+            .filter((m): m is ToolMessage => m instanceof ToolMessage)
+            .map(m => m.tool_call_id)
+        );
+        for (const tc of last.tool_calls) {
+          if (!answeredIds.has(tc.id!)) {
+            partialMessages.push(new ToolMessage({
+              content: "[Aborted by user]",
+              tool_call_id: tc.id!,
+              name: tc.name,
+            }));
+          }
+        }
+      }
+
+      // Append an AI message so the agent knows the previous run was aborted
+      partialMessages.push(new AIMessage("[Task aborted by user]"));
+
+      const contextTokens = estimateTokens([...history, ...partialMessages], overheadTokens);
+      onEvent({ type: "result", content: "", contextTokens });
+
+      return { newMessages: partialMessages, lastContent: "", contextTokens, aborted: true };
+    }
+
+    // For any other error, save partial messages so history isn't lost
+    let partialMessages = capturedMessages.slice(history.length);
+
+    if (partialMessages.length > 0) {
+      // Add stub ToolMessages for unanswered tool calls
+      const last = partialMessages[partialMessages.length - 1];
+      if (last instanceof AIMessage && last.tool_calls?.length) {
+        const answeredIds = new Set(
+          partialMessages
+            .filter((m): m is ToolMessage => m instanceof ToolMessage)
+            .map(m => m.tool_call_id)
+        );
+        for (const tc of last.tool_calls) {
+          if (!answeredIds.has(tc.id!)) {
+            partialMessages.push(new ToolMessage({
+              content: `[Error: ${err.message}]`,
+              tool_call_id: tc.id!,
+              name: tc.name,
+            }));
+          }
+        }
+      }
+
+      partialMessages.push(new AIMessage(`[Task interrupted by error: ${err.message}]`));
+
+      const contextTokens = estimateTokens([...history, ...partialMessages], overheadTokens);
+      onEvent({ type: "error", content: err.message });
+      onEvent({ type: "result", content: "", contextTokens });
+
+      return { newMessages: partialMessages, lastContent: "", contextTokens, aborted: true };
+    }
+
+    throw err;
   }
 }

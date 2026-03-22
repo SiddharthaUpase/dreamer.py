@@ -255,6 +255,8 @@ export function useProject(projectId: string) {
       const decoder = new TextDecoder();
       let buffer = "";
       let finalMessages = nextMessages;
+      let streamingContent = ""; // Accumulates token chunks for live display
+      let isStreaming = false;   // Whether we're in a token-streaming phase
 
       while (true) {
         const { done, value } = await reader.read();
@@ -269,7 +271,34 @@ export function useProject(projectId: string) {
           try {
             const event = JSON.parse(line.slice(6));
 
-            if (event.type === "tool_start") {
+            if (event.type === "token") {
+              streamingContent += event.content || "";
+              if (!isStreaming) {
+                isStreaming = true;
+                // Add a new streaming assistant message
+                finalMessages = [...finalMessages, {
+                  role: "assistant" as const,
+                  content: streamingContent,
+                  tools: runTools.length > 0 ? [...runTools] : undefined,
+                }];
+              } else {
+                // Update the last message in place
+                finalMessages = [
+                  ...finalMessages.slice(0, -1),
+                  {
+                    role: "assistant" as const,
+                    content: streamingContent,
+                    tools: runTools.length > 0 ? [...runTools] : undefined,
+                  },
+                ];
+              }
+              setMessages(finalMessages);
+            } else if (event.type === "tool_start") {
+              // If we were streaming text, finalize that message before tool calls
+              if (isStreaming) {
+                isStreaming = false;
+                streamingContent = "";
+              }
               const newTool: ToolActivity = { tool: event.tool, args: event.args, status: "running" };
               runTools = [...runTools, newTool];
               setToolActivities([...runTools]);
@@ -292,17 +321,26 @@ export function useProject(projectId: string) {
                 if (urlMatch) setPreviewUrl(urlMatch[0]);
               }
             } else if (event.type === "result") {
+              // Final result replaces any streaming message with the complete content
+              isStreaming = false;
+              streamingContent = "";
+              // Remove any in-progress streaming message before adding the final one
+              const base = finalMessages[finalMessages.length - 1]?.role === "assistant"
+                ? finalMessages.slice(0, -1)
+                : finalMessages;
               const assistantMsg: ChatMessage = {
                 role: "assistant",
                 content: event.content || "",
                 tools: runTools.length > 0 ? [...runTools] : undefined,
               };
-              finalMessages = [...finalMessages, assistantMsg];
+              finalMessages = [...base, assistantMsg];
               setMessages(finalMessages);
               if (event.contextTokens != null && event.contextLimit != null) {
                 setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
               }
             } else if (event.type === "error") {
+              isStreaming = false;
+              streamingContent = "";
               const errMsg: ChatMessage = {
                 role: "assistant",
                 content: `Error: ${event.content}`,
