@@ -10,6 +10,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { deploy } from "../services/deploy.js";
 
 // ===== Todo types =====
 export interface TodoItem {
@@ -169,6 +170,13 @@ export interface DatabaseConfig {
   connectionString: string;
 }
 
+export interface DeployConfig {
+  projectName: string;
+  vercelToken: string;
+  vercelTeamId?: string;
+  envVars?: Record<string, string>;
+}
+
 // ===== Subagent types =====
 export type SubagentLogFn = (label: string, tool: string, detail: string) => void;
 
@@ -225,7 +233,7 @@ const SUBAGENT_MAX_ITERATIONS = 30;
 
 const WORK_DIR = "/app";
 
-export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdate, dbConfig?: DatabaseConfig, subagentConfig?: SubagentConfig) {
+export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdate, dbConfig?: DatabaseConfig, subagentConfig?: SubagentConfig, deployConfig?: DeployConfig) {
   const exec = async (command: string): Promise<string> => {
     const result = await sandbox.process.exec({ command, workingDir: WORK_DIR, waitForCompletion: true });
     return result.exitCode !== 0
@@ -967,8 +975,48 @@ export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdat
     }
   );
 
+  // ===== deploy =====
+  const deployTool = tool(
+    async () => {
+      if (!deployConfig) {
+        return "Error: Deployment not configured. Set VERCEL_TOKEN in .env to enable deployments.";
+      }
+
+      try {
+        const logs: string[] = [];
+        const result = await deploy(sandbox, {
+          projectName: deployConfig.projectName,
+          token: deployConfig.vercelToken,
+          teamId: deployConfig.vercelTeamId,
+          envVars: deployConfig.envVars,
+        }, (msg) => { logs.push(msg); });
+
+        if (result.success) {
+          return `Deployment successful!\nURL: ${result.url}\nDeployment ID: ${result.deploymentId}\n\nBuild log:\n${logs.join("\n")}`;
+        } else {
+          return `Deployment failed (${result.readyState}).\n\nError:\n${result.error || "Unknown error"}\n\nBuild log:\n${logs.join("\n")}`;
+        }
+      } catch (err: any) {
+        return `Deploy error: ${err.message}`;
+      }
+    },
+    {
+      name: "deploy",
+      description:
+        "Deploy the current project to Vercel. This reads all files from /app, uploads them to Vercel, " +
+        "and creates a production deployment. Returns the deployment URL on success, or build errors on failure.\n\n" +
+        "Use this when:\n" +
+        "- The user asks to deploy, publish, or go live\n" +
+        "- You need to test if the production build works\n" +
+        "- After fixing build errors from a previous failed deployment\n\n" +
+        "The tool handles everything automatically — no arguments needed.",
+      schema: z.object({}),
+    }
+  );
+
   const allTools: any[] = [bash, read, write, edit, grep, glob, todowrite, webSearch, urlFetch, imageGenerate];
   if (dbConfig) allTools.push(runSql);
   if (subagentConfig) allTools.push(subagentTool);
+  if (deployConfig) allTools.push(deployTool);
   return allTools;
 }

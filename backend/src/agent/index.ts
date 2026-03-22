@@ -12,8 +12,8 @@ import {
 import type { ToolCall } from "@langchain/core/messages/tool";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { SandboxInstance } from "@blaxel/core";
-import { createTools, isImagePath, isPdfPath, getMimeType, type TodoItem, type DatabaseConfig, type SubagentConfig } from "./tools.js";
-export type { DatabaseConfig } from "./tools.js";
+import { createTools, isImagePath, isPdfPath, getMimeType, type TodoItem, type DatabaseConfig, type SubagentConfig, type DeployConfig } from "./tools.js";
+export type { DatabaseConfig, DeployConfig } from "./tools.js";
 import type { StoredMessage } from "../services/projectStore.js";
 
 // Injects cache_control into the request body for Anthropic prompt caching via OpenRouter.
@@ -83,6 +83,9 @@ export const AVAILABLE_MODELS: Record<string, () => BaseChatModel> = {
 };
 
 export const MODEL_LIST = Object.keys(AVAILABLE_MODELS);
+
+// Models that support image/vision input
+const VISION_MODELS = new Set(["claude-sonnet", "claude-haiku"]);
 
 // ===== Modular system prompt =====
 const PROMPTS_DIR = pathNode.join(pathNode.dirname(new URL(import.meta.url).pathname), "prompts");
@@ -567,8 +570,9 @@ const callTool = task("callTool", async (params: {
   toolsByName: Record<string, any>;
   onEvent: (event: ToolEvent) => void;
   signal?: AbortSignal;
+  supportsVision?: boolean;
 }): Promise<{ toolMsg: ToolMessage; mediaMsg?: HumanMessage }> => {
-  const { toolCall, toolsByName, onEvent, signal } = params;
+  const { toolCall, toolsByName, onEvent, signal, supportsVision } = params;
 
   const toolDef = toolsByName[toolCall.name];
   if (!toolDef) {
@@ -617,31 +621,39 @@ const callTool = task("callTool", async (params: {
         if (parsed.extraText) {
           toolOutput += `\n\n${parsed.extraText}`;
         }
-        mediaMsg = new HumanMessage({
-          content: [
-            { type: "text", text: `Here is the image from ${parsed.path}:` },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${parsed.mimeType};base64,${parsed.base64}`,
+        if (supportsVision) {
+          mediaMsg = new HumanMessage({
+            content: [
+              { type: "text", text: `Here is the image from ${parsed.path}:` },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:${parsed.mimeType};base64,${parsed.base64}`,
+                },
               },
-            },
-          ],
-        });
+            ],
+          });
+        } else {
+          toolOutput += "\n\n⚠️ Your current model does not support image input. You cannot see this image. Describe what you expected to see, or suggest the user switch to a vision-capable model (claude-sonnet, claude-haiku) if visual verification is needed.";
+        }
       } else if (parsed?.__pdf) {
         toolOutput = `[PDF: ${parsed.path} (${(parsed.size / 1024).toFixed(1)} KB)]`;
-        mediaMsg = new HumanMessage({
-          content: [
-            { type: "text", text: `Here is the PDF document from ${parsed.path}:` },
-            {
-              type: "file",
-              file: {
-                filename: parsed.path.split("/").pop() || "document.pdf",
-                file_data: `data:application/pdf;base64,${parsed.base64}`,
-              },
-            } as any,
-          ],
-        });
+        if (supportsVision) {
+          mediaMsg = new HumanMessage({
+            content: [
+              { type: "text", text: `Here is the PDF document from ${parsed.path}:` },
+              {
+                type: "file",
+                file: {
+                  filename: parsed.path.split("/").pop() || "document.pdf",
+                  file_data: `data:application/pdf;base64,${parsed.base64}`,
+                },
+              } as any,
+            ],
+          });
+        } else {
+          toolOutput += "\n\n⚠️ Your current model does not support PDF input. You cannot read this PDF. Use a text extraction tool or suggest the user switch to a vision-capable model (claude-sonnet, claude-haiku).";
+        }
       }
     } catch {
       // Not JSON, regular tool output
@@ -680,6 +692,7 @@ export async function runAgentStream(
   signal?: AbortSignal,
   previewUrl?: string,
   dbConfig?: DatabaseConfig,
+  deployConfig?: DeployConfig,
 ): Promise<AgentResult> {
   const createModel = AVAILABLE_MODELS[modelId] || AVAILABLE_MODELS["claude-sonnet"];
   const model = createModel();
@@ -693,7 +706,7 @@ export async function runAgentStream(
   };
   const tools = createTools(sandbox, (todos) => {
     onEvent({ type: "todo_update", todos });
-  }, dbConfig, subagentConfig);
+  }, dbConfig, subagentConfig, deployConfig);
   const toolsByName: Record<string, any> = {};
   for (const t of tools) toolsByName[t.name] = t;
   const modelWithTools = (model as any).bindTools(tools);
@@ -768,7 +781,7 @@ export async function runAgentStream(
 
       // Execute tools
       const results = await Promise.all(
-        fullResponse.tool_calls.map((tc) => callTool({ toolCall: tc, toolsByName, onEvent, signal }))
+        fullResponse.tool_calls.map((tc) => callTool({ toolCall: tc, toolsByName, onEvent, signal, supportsVision: VISION_MODELS.has(modelId) }))
       );
 
       const toolMsgs = results.map((r) => r.toolMsg);

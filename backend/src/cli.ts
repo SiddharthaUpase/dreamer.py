@@ -7,7 +7,8 @@ import { SandboxInstance as SandboxClass } from "@blaxel/core";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { runAgentStream, collectOutputFiles, langChainToDbRow, dbRowToLangChain, compactHistory, type ToolEvent, type DatabaseConfig } from "./agent/index.js";
+import { runAgentStream, collectOutputFiles, langChainToDbRow, dbRowToLangChain, compactHistory, type ToolEvent, type DatabaseConfig, type DeployConfig } from "./agent/index.js";
+import { deploy } from "./services/deploy.js";
 import type { StoredMessage } from "./services/projectStore.js";
 
 const MODELS = ["claude-sonnet", "claude-haiku", "minimax", "kimi", "mimo"];
@@ -116,6 +117,8 @@ const NEON_BRANCH_ID = process.env.NEON_BRANCH_ID || "";
 const NEON_ORG_ID = process.env.NEON_ORG_ID || "";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const AUTH_PROXY_URL = process.env.AUTH_PROXY_URL || "";
+const VERCEL_TOKEN = process.env.VERCEL_TOKEN || "";
+const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || "";
 
 async function createProjectDatabase(name: string): Promise<{ databaseUrl: string }> {
   const dbName = name.replace(/-/g, "_"); // Postgres doesn't like hyphens in db names
@@ -135,10 +138,14 @@ async function createProjectDatabase(name: string): Promise<{ databaseUrl: strin
 
   if (!createRes.ok) {
     const err = await createRes.text();
-    throw new Error(`Failed to create database: ${err}`);
+    // Ignore "already exists" — just get the connection string
+    if (!err.includes("already exists")) {
+      throw new Error(`Failed to create database: ${err}`);
+    }
+    console.log(dim(`Database "${dbName}" already exists.`));
+  } else {
+    console.log(green(`Database "${dbName}" created.`));
   }
-
-  console.log(green(`Database "${dbName}" created.`));
 
   // Get connection string
   const uriRes = await fetch(
@@ -184,9 +191,13 @@ async function createProjectBucket(name: string): Promise<{
 
   if (!bucketRes.ok) {
     const err = await bucketRes.text();
-    throw new Error(`Failed to create R2 bucket: ${err}`);
+    if (!err.includes("already exists")) {
+      throw new Error(`Failed to create R2 bucket: ${err}`);
+    }
+    console.log(dim(`Bucket "${bucketName}" already exists.`));
+  } else {
+    console.log(green(`Bucket "${bucketName}" created.`));
   }
-  console.log(green(`Bucket "${bucketName}" created.`));
 
   // 2. Enable public access (r2.dev domain)
   console.log(dim("Enabling public access..."));
@@ -274,6 +285,24 @@ async function injectSkills(sb: SandboxInstance): Promise<void> {
   console.log(green("Skills injected into sandbox /skills/"));
 }
 
+async function readSandboxEnvVars(sb: SandboxInstance): Promise<Record<string, string>> {
+  const vars: Record<string, string> = {};
+  try {
+    const content = await sb.fs.read("/app/.env.local");
+    const text = typeof content === "string" ? content : "";
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx <= 0) continue;
+      const key = trimmed.slice(0, eqIdx);
+      const value = trimmed.slice(eqIdx + 1);
+      vars[key] = value;
+    }
+  } catch { /* .env.local doesn't exist */ }
+  return vars;
+}
+
 async function injectProjectEnv(sb: SandboxInstance, meta: ProjectMeta): Promise<void> {
   const envLines: string[] = [];
 
@@ -338,50 +367,87 @@ const UPLOAD_EXTENSIONS = new Set([
 ]);
 
 function findLocalFiles(text: string): { file: string; raw: string; content: Buffer }[] {
-  // Match file paths with escaped spaces (Siddhartha\ Upase.jpeg), quoted paths, or plain paths
-  const patterns = [
-    /(?:~\/|\/)[^\s,;'"\\]*(?:\\ [^\s,;'"\\]*)+(?:\s[^\s,;'"]*\.[a-zA-Z0-9]+)?/g,  // escaped spaces, with optional unescaped trailing segment ending in .ext
-    /"((?:~\/|\/)[^"]+)"/g,                        // double-quoted: "/path/to/My File.png"
-    /'((?:~\/|\/)[^']+)'/g,                        // single-quoted: '/path/to/My File.png'
-    /(?:~\/|\/)[^\s,;'"]+/g,                       // plain paths: /path/to/file.png
-  ];
-
   const seen = new Set<string>();
   const results: { file: string; raw: string; content: Buffer }[] = [];
 
-  for (const pattern of patterns) {
+  function tryAdd(raw: string, filePath: string) {
+    const cleaned = filePath.replace(/\\ /g, " ");
+    const resolved = cleaned.startsWith("~/")
+      ? path.join(os.homedir(), cleaned.slice(2))
+      : cleaned;
+
+    if (seen.has(resolved)) return;
+
+    const ext = path.extname(resolved).toLowerCase();
+    if (!UPLOAD_EXTENSIONS.has(ext) && ext !== "") return;
+
+    try {
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile()) return;
+      const content = fs.readFileSync(resolved);
+      seen.add(resolved);
+      results.push({ file: resolved, raw, content });
+    } catch {
+      // File doesn't exist
+    }
+  }
+
+  // 1. Quoted paths (most reliable)
+  const quotedPatterns = [
+    /"((?:~\/|\/)[^"]+)"/g,   // "path with spaces.png"
+    /'((?:~\/|\/)[^']+)'/g,   // 'path with spaces.png'
+  ];
+  for (const pattern of quotedPatterns) {
     let match;
     while ((match = pattern.exec(text)) !== null) {
-      // For quoted patterns, use the capture group; otherwise the full match
-      const raw = match[0];
-      const extracted = match[1] || match[0];
-      // Unescape backslash-spaces
-      const cleaned = extracted.replace(/\\ /g, " ");
-      const resolved = cleaned.startsWith("~/")
-        ? path.join(os.homedir(), cleaned.slice(2))
-        : cleaned;
+      tryAdd(match[0], match[1]);
+    }
+  }
 
-      if (seen.has(resolved)) continue;
-      seen.add(resolved);
+  // 2. Escaped spaces: /path/to/My\ File.png
+  const escapedPattern = /(?:~\/|\/)[^\s,;'"]*(?:\\ [^\s,;'"]*)+/g;
+  let match;
+  while ((match = escapedPattern.exec(text)) !== null) {
+    tryAdd(match[0], match[0]);
+  }
 
-      const ext = path.extname(resolved).toLowerCase();
-      if (!UPLOAD_EXTENSIONS.has(ext) && ext !== "") continue;
-
+  // 3. Unescaped paths — greedily match from / or ~/ to end of message or next newline,
+  //    then progressively shorten until we find a file that exists
+  const unescapedPattern = /(?:~\/|\/)[^\n,;'"]+/g;
+  while ((match = unescapedPattern.exec(text)) !== null) {
+    let candidate = match[0].trim();
+    // Try the full match first, then remove words from the end until a file is found
+    const words = candidate.split(/\s+/);
+    for (let len = words.length; len >= 1; len--) {
+      const attempt = words.slice(0, len).join(" ");
+      const resolved = attempt.startsWith("~/")
+        ? path.join(os.homedir(), attempt.slice(2))
+        : attempt;
       try {
-        // Read file content immediately — temp files (e.g. macOS screenshots) can vanish quickly
-        const content = fs.readFileSync(resolved);
-        results.push({ file: resolved, raw, content });
+        const stat = fs.statSync(resolved);
+        if (stat.isFile()) {
+          const ext = path.extname(resolved).toLowerCase();
+          if (UPLOAD_EXTENSIONS.has(ext) || ext === "") {
+            if (!seen.has(resolved)) {
+              const content = fs.readFileSync(resolved);
+              seen.add(resolved);
+              results.push({ file: resolved, raw: words.slice(0, len).join(" "), content });
+            }
+          }
+          break; // Found a valid file, stop shortening
+        }
       } catch {
-        // File doesn't exist or can't be read — skip
+        // Not a valid path, try shorter
       }
     }
   }
+
   return results;
 }
 
 async function uploadFilesToSandbox(files: { file: string; content: Buffer }[]): Promise<Map<string, string>> {
   const mapping = new Map<string, string>();
-  await sandbox.fs.mkdir("/app/uploads");
+  try { await sandbox.fs.mkdir("/app/uploads"); } catch { /* already exists */ }
 
   for (const { file: localPath, content } of files) {
     const filename = path.basename(localPath).replace(/[\s\u00A0\u202F\u2007\u2060]/g, "_");
@@ -697,29 +763,19 @@ async function handleNewCommand(name: string, rl: readline.Interface) {
     // 2. Provision Neon database
     const { databaseUrl } = await createProjectDatabase(name);
 
-    // 3. Provision R2 storage bucket
-    const r2 = CF_API_TOKEN ? await createProjectBucket(name) : null;
-
-    // 4. Generate JWT secret for auth sessions
+    // 3. Generate JWT secret for auth sessions
     const jwtSecret = crypto.randomUUID() + crypto.randomUUID();
 
-    // 5. Save to meta
+    // 4. Save to meta (R2 bucket was already created by connectToProject)
     const meta = loadProjectMeta(name)!;
     meta.databaseUrl = databaseUrl;
     meta.jwtSecret = jwtSecret;
-    if (r2) {
-      meta.r2BucketName = r2.bucketName;
-      meta.r2AccessKeyId = r2.accessKeyId;
-      meta.r2SecretAccessKey = r2.secretAccessKey;
-      meta.r2TokenId = r2.tokenId;
-      meta.r2PublicDomain = r2.publicDomain;
-    }
     saveProjectMeta(name, meta);
 
-    // 6. Inject env vars into sandbox
+    // 5. Inject env vars into sandbox
     await injectProjectEnv(sandbox, meta);
 
-    console.log(green(`\nProject "${name}" created with database${r2 ? " + storage" : ""}.`));
+    console.log(green(`\nProject "${name}" created with database + storage.`));
   } catch (err: any) {
     console.error(red(`Failed to create project: ${err.message}`));
   }
@@ -854,6 +910,33 @@ async function handleInput(line: string, rl: readline.Interface) {
     await handleDeleteCommand(text.slice(8).trim(), rl);
     return;
   }
+  if (text === "/deploy") {
+    if (!VERCEL_TOKEN) {
+      console.log(red("Vercel not configured. Set VERCEL_TOKEN in .env"));
+      rl.prompt();
+      return;
+    }
+    console.log(dim("\nDeploying to Vercel...\n"));
+    try {
+      const envVars = await readSandboxEnvVars(sandbox);
+      const result = await deploy(sandbox, {
+        projectName: `vas-${currentProject}`,
+        token: VERCEL_TOKEN,
+        teamId: VERCEL_TEAM_ID || undefined,
+        envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
+      }, (msg) => console.log(dim(`  ${msg}`)));
+
+      if (result.success) {
+        console.log(green(`\nDeployed: ${result.url}`));
+      } else {
+        console.log(red(`\nDeploy failed: ${result.error}`));
+      }
+    } catch (err: any) {
+      console.error(red(`Deploy error: ${err.message}`));
+    }
+    rl.prompt();
+    return;
+  }
   if (text.startsWith("/model")) {
     const newModel = text.split(" ")[1];
     if (newModel && MODELS.includes(newModel)) {
@@ -920,6 +1003,17 @@ async function handleInput(line: string, rl: readline.Interface) {
       ? { connectionString: meta.databaseUrl }
       : undefined;
 
+    // Build deploy config — read ALL env vars from sandbox .env.local
+    const sandboxEnvVars = VERCEL_TOKEN ? await readSandboxEnvVars(sandbox) : {};
+    const deployConfig: DeployConfig | undefined = VERCEL_TOKEN
+      ? {
+          projectName: `vas-${currentProject}`,
+          vercelToken: VERCEL_TOKEN,
+          vercelTeamId: VERCEL_TEAM_ID || undefined,
+          envVars: Object.keys(sandboxEnvVars).length > 0 ? sandboxEnvVars : undefined,
+        }
+      : undefined;
+
     const result = await runAgentStream(
       sandbox,
       history,
@@ -929,6 +1023,7 @@ async function handleInput(line: string, rl: readline.Interface) {
       abortController.signal,
       previewUrl || undefined,
       dbConfig,
+      deployConfig,
     );
 
     if (result.compactedHistory) {
@@ -978,7 +1073,7 @@ async function main() {
   const startProject = prefs.lastProject || "cli-test";
 
   console.log(dim(`Model: ${currentModel} | Project: ${startProject}`));
-  console.log(dim("Commands: /clear /compact /history /url /model /projects /new /switch /delete /exit\n"));
+  console.log(dim("Commands: /clear /compact /history /url /model /projects /new /switch /delete /deploy /exit\n"));
 
   // Check Neon setup
   if (!NEON_API_KEY || !NEON_PROJECT_ID) {
