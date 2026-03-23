@@ -8,8 +8,8 @@ import { ApiClient } from "./apiClient.js";
 const MODELS = ["claude-sonnet", "claude-haiku", "minimax", "kimi", "mimo"];
 const BASE_DIR = path.join(os.homedir(), ".agent-vas");
 const PREFS_PATH = path.join(BASE_DIR, "preferences.json");
-const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3001";
-const APP_URL = process.env.APP_URL || "http://localhost:3000";
+const BACKEND_URL = process.env.BACKEND_URL || "https://dreamer-py.onrender.com";
+const APP_URL = process.env.APP_URL || "https://dreamer-55vh08re0-siddharthaupases-projects.vercel.app";
 
 // ===== Preferences =====
 function loadPrefs(): Record<string, string> {
