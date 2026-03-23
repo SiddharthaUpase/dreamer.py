@@ -16,7 +16,7 @@ import TerminalIcon from "@mui/icons-material/Terminal";
 import lightTheme from "@/theme-light";
 import { createClient } from "@/lib/supabase/client";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://dreamer-py.onrender.com";
 
 function CliAuthHandler() {
   const searchParams = useSearchParams();
