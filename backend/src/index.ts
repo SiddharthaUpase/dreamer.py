@@ -52,7 +52,7 @@ const app = express();
 // CORS — restrict to allowed origins
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",")
-  : ["http://localhost:3000", "http://localhost:3001", "https://dreamer-55vh08re0-siddharthaupases-projects.vercel.app"];
+  : ["http://localhost:3000", "http://localhost:3001", "https://dreamer-py.vercel.app"];
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (CLI, server-to-server)
