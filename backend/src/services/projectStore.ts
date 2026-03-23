@@ -53,13 +53,12 @@ export async function getProject(id: string): Promise<StoredProject | null> {
 }
 
 export async function saveProject(project: Omit<StoredProject, "created_at" | "updated_at">) {
-  const { error } = await supabase.from("projects").insert(project);
+  const { error } = await supabase.from("projects").insert(project as any);
   if (error) throw error;
 }
 
 export async function updateProject(id: string, updates: Partial<StoredProject>) {
-  const { data, error } = await supabase
-    .from("projects")
+  const { data, error } = await (supabase.from("projects") as any)
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq("id", id)
     .select()
@@ -86,7 +85,7 @@ export async function getProjectMessages(projectId: string): Promise<StoredMessa
 }
 
 export async function saveMessage(msg: Omit<StoredMessage, "id" | "created_at">) {
-  const { error } = await supabase.from("messages").insert(msg);
+  const { error } = await supabase.from("messages").insert(msg as any);
   if (error) throw error;
 }
 
@@ -100,7 +99,7 @@ export async function saveMessages(msgs: Omit<StoredMessage, "id" | "created_at"
     ...msg,
     created_at: new Date(now + i).toISOString(),
   }));
-  const { error } = await supabase.from("messages").insert(withTimestamps);
+  const { error } = await supabase.from("messages").insert(withTimestamps as any);
   if (error) throw error;
 }
 

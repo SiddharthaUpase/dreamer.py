@@ -86,7 +86,7 @@ export async function approveDeviceCode(
     key_hash: keyHash,
     key_prefix: keyPrefix,
     name: "CLI",
-  });
+  } as any);
 
   if (error) return { success: false, error: error.message };
 
@@ -112,11 +112,10 @@ export async function verifyApiKey(key: string): Promise<{ userId: string } | nu
   if (error || !data) return null;
 
   // Update last_used_at (fire and forget)
-  supabase
-    .from("api_keys")
+  (supabase.from("api_keys") as any)
     .update({ last_used_at: new Date().toISOString() })
     .eq("key_hash", keyHash)
     .then(() => {});
 
-  return { userId: data.user_id };
+  return { userId: (data as any).user_id };
 }
