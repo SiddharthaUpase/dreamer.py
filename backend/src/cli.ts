@@ -1,5 +1,5 @@
 import "dotenv/config";
-import readline from "readline";
+import readline, { emitKeypressEvents } from "readline";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -642,12 +642,15 @@ async function main() {
     process.exit(1);
   }
 
+  emitKeypressEvents(process.stdin);
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     prompt: bold(`(${currentProject}) > `),
   });
 
+  // Ctrl+C to exit (when not running agent), or abort (when running)
   rl.on("SIGINT", () => {
     if (abortController) {
       abortController.abort();
@@ -655,6 +658,14 @@ async function main() {
     } else {
       console.log(`\n${dim("Bye.")}`);
       process.exit(0);
+    }
+  });
+
+  // ESC key to abort current agent run
+  process.stdin.on("keypress", (_ch: string, key: { name?: string; sequence?: string }) => {
+    if (key?.name === "escape" && abortController) {
+      abortController.abort();
+      console.log(`\n${dim("Aborting...")}`);
     }
   });
 

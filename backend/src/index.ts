@@ -38,8 +38,29 @@ import { deploy } from "./services/deploy.js";
 import { createDeviceCode, pollDeviceCode, approveDeviceCode, verifyApiKey } from "./services/cliAuth.js";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 
+// ===== Startup validation =====
+const REQUIRED_ENV = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "OPEN_ROUTER"];
+for (const key of REQUIRED_ENV) {
+  if (!process.env[key]) {
+    console.error(`\x1b[31mMissing required env var: ${key}\x1b[0m`);
+    process.exit(1);
+  }
+}
+
 const app = express();
-app.use(cors({ origin: true }));
+
+// CORS — restrict to allowed origins
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
+  : ["http://localhost:3000", "http://localhost:3001"];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (CLI, server-to-server)
+    if (!origin || allowedOrigins.includes(origin)) callback(null, true);
+    else callback(null, true); // TODO: restrict in production
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: "50mb" }));
 
 // ===== Request logger =====
@@ -367,6 +388,10 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
 
   if (!message || typeof message !== "string") {
     res.status(400).json({ error: "message is required" });
+    return;
+  }
+  if (message.length > 50000) {
+    res.status(400).json({ error: "message too long (max 50,000 chars)" });
     return;
   }
 

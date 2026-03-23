@@ -68,7 +68,7 @@ export const AVAILABLE_MODELS: Record<string, () => BaseChatModel> = {
   "minimax": () =>
     new ChatOpenAI({
       ...openRouterConfig,
-      model: "minimax/minimax-m2.5",
+      model: "minimax/minimax-m2.7",
     }),
   "kimi": () =>
     new ChatOpenAI({
@@ -292,51 +292,53 @@ export function sanitizeHistory(messages: BaseMessage[]): BaseMessage[] {
   if (messages.length === 0) return [];
 
   const result: BaseMessage[] = [];
+  const SYNTHETIC_RESULT = "[Tool call result unavailable — previous session ended before completion]";
 
+  // Skip until first HumanMessage
   let start = 0;
   while (start < messages.length && !(messages[start] instanceof HumanMessage)) {
     start++;
   }
 
+  // Track pending tool_call IDs and their names
+  const pending = new Map<string, string>(); // id → tool name
+
+  function flushPending() {
+    for (const [id, name] of pending) {
+      result.push(new ToolMessage({
+        content: SYNTHETIC_RESULT,
+        tool_call_id: id,
+        name,
+      }));
+    }
+    pending.clear();
+  }
+
   for (let i = start; i < messages.length; i++) {
     const msg = messages[i];
 
-    if (msg instanceof ToolMessage) {
-      const prev = result[result.length - 1];
-      if (prev instanceof AIMessage && prev.tool_calls?.some(tc => tc.id === msg.tool_call_id)) {
-        result.push(msg);
-      }
+    if (msg instanceof HumanMessage) {
+      flushPending();
+      result.push(msg);
     } else if (msg instanceof AIMessage) {
+      flushPending();
       result.push(msg);
-    } else if (msg instanceof HumanMessage) {
-      result.push(msg);
-    }
-  }
-
-  while (result.length > 0) {
-    const last = result[result.length - 1];
-
-    if (last instanceof ToolMessage) break;
-
-    if (last instanceof AIMessage && last.tool_calls?.length) {
-      const aiIndex = result.length - 1;
-      const expectedIds = new Set(last.tool_calls.map(tc => tc.id));
-      const foundIds = new Set<string>();
-      for (let j = aiIndex + 1; j < result.length; j++) {
-        const m = result[j];
-        if (m instanceof ToolMessage && m.tool_call_id) {
-          foundIds.add(m.tool_call_id);
+      if (msg.tool_calls?.length) {
+        for (const tc of msg.tool_calls) {
+          if (tc.id) pending.set(tc.id, tc.name);
         }
       }
-      if (foundIds.size < expectedIds.size) {
-        result.splice(aiIndex);
-        continue;
+    } else if (msg instanceof ToolMessage) {
+      if (msg.tool_call_id && pending.has(msg.tool_call_id)) {
+        result.push(msg);
+        pending.delete(msg.tool_call_id);
       }
-      break;
+      // else: orphan tool result, skip
     }
-
-    break;
   }
+
+  // Flush any remaining pending at the end
+  flushPending();
 
   return result;
 }
@@ -706,7 +708,7 @@ export async function runAgentStream(
   };
   const tools = createTools(sandbox, (todos) => {
     onEvent({ type: "todo_update", todos });
-  }, dbConfig, subagentConfig, deployConfig);
+  }, dbConfig, subagentConfig, deployConfig, VISION_MODELS.has(modelId));
   const toolsByName: Record<string, any> = {};
   for (const t of tools) toolsByName[t.name] = t;
   const modelWithTools = (model as any).bindTools(tools);

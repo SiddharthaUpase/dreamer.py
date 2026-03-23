@@ -233,7 +233,7 @@ const SUBAGENT_MAX_ITERATIONS = 30;
 
 const WORK_DIR = "/app";
 
-export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdate, dbConfig?: DatabaseConfig, subagentConfig?: SubagentConfig, deployConfig?: DeployConfig) {
+export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdate, dbConfig?: DatabaseConfig, subagentConfig?: SubagentConfig, deployConfig?: DeployConfig, supportsVision = true) {
   const exec = async (command: string): Promise<string> => {
     const result = await sandbox.process.exec({ command, workingDir: WORK_DIR, waitForCompletion: true });
     return result.exitCode !== 0
@@ -298,6 +298,9 @@ export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdat
     async ({ path, offset, limit }) => {
       // === Image files ===
       if (isImagePath(path)) {
+        if (!supportsVision) {
+          return `⚠️ Your current model does not support image input. Cannot view ${path}. The file exists but you cannot see it. Suggest the user switch to a vision-capable model (claude-sonnet, claude-haiku) if visual inspection is needed.`;
+        }
         try {
           const MAX_RAW_SIZE = 10 * 1024 * 1024;
           const MAX_API_SIZE = 1 * 1024 * 1024;
@@ -337,6 +340,9 @@ export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdat
 
       // === PDF files ===
       if (isPdfPath(path)) {
+        if (!supportsVision) {
+          return `⚠️ Your current model does not support PDF input. Cannot view ${path}. The file exists but you cannot read it. Suggest the user switch to a vision-capable model (claude-sonnet, claude-haiku).`;
+        }
         try {
           const MAX_PDF_SIZE = 30 * 1024 * 1024; // 30MB cap (Anthropic supports up to 32MB)
           const blob = await sandbox.fs.readBinary(path);
@@ -570,6 +576,11 @@ export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdat
         const hasScreenshot = requestedFormats.includes("screenshot");
         const hasFullPageScreenshot = requestedFormats.includes("screenshot@fullPage");
         const wantsScreenshot = hasScreenshot || hasFullPageScreenshot;
+
+        // Block screenshot for non-vision models — don't waste API credits
+        if (wantsScreenshot && !supportsVision) {
+          return "⚠️ Your current model does not support image input. Screenshots are disabled — no screenshot was taken. Use `formats: [\"markdown\"]` to read page content as text instead, or suggest the user switch to a vision-capable model (claude-sonnet, claude-haiku).";
+        }
         // When screenshot is requested, use actions with viewport instead of the formats screenshot
         // This gives us control over viewport size and avoids cached screenshots
         const firecrawlFormats = requestedFormats
