@@ -1,0 +1,39 @@
+{
+  "name": "dreamer-py",
+  "version": "1.0.0",
+  "description": "CLI for Dreamer — an AI-powered app builder",
+  "type": "module",
+  "bin": {
+    "dreamer": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "ai",
+    "cli",
+    "agent",
+    "dreamer",
+    "app-builder"
+  ],
+  "author": "SiddharthaUpase",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SiddharthaUpase/dreamer.py"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
