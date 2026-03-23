@@ -231,11 +231,9 @@ const SUBAGENT_TYPES: Record<string, { prompt: string; tools: string[] }> = {
 
 const SUBAGENT_MAX_ITERATIONS = 30;
 
-const WORK_DIR = "/app";
-
 export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdate, dbConfig?: DatabaseConfig, subagentConfig?: SubagentConfig, deployConfig?: DeployConfig, supportsVision = true) {
   const exec = async (command: string): Promise<string> => {
-    const result = await sandbox.process.exec({ command, workingDir: WORK_DIR, waitForCompletion: true });
+    const result = await sandbox.process.exec({ command, waitForCompletion: true });
     return result.exitCode !== 0
       ? `Error (exit ${result.exitCode}): ${result.stderr || result.stdout || ""}`
       : result.stdout || "";
@@ -255,7 +253,7 @@ export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdat
       const timeoutMs = (timeout || 60) * 1000;
       try {
         const result = await Promise.race([
-          sandbox.process.exec({ command, workingDir: WORK_DIR, waitForCompletion: true }),
+          sandbox.process.exec({ command, waitForCompletion: true }),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error(`Timed out after ${timeout || 60}s`)), timeoutMs)
           ),
