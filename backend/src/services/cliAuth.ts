@@ -9,7 +9,7 @@ export async function createDeviceCode(): Promise<{ code: string }> {
   const code = crypto.randomBytes(16).toString("hex");
   const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60 * 1000).toISOString();
 
-  const { error } = await supabase.from("device_codes").insert({
+  const { error } = await (supabase.from("device_codes") as any).insert({
     code,
     status: "pending",
     expires_at: expiresAt,
@@ -23,8 +23,7 @@ export async function pollDeviceCode(code: string): Promise<{
   status: "pending" | "approved" | "expired" | "not_found";
   apiKey?: string;
 }> {
-  const { data, error } = await supabase
-    .from("device_codes")
+  const { data, error } = await (supabase.from("device_codes") as any)
     .select("status, api_key, expires_at")
     .eq("code", code)
     .single();
@@ -35,14 +34,14 @@ export async function pollDeviceCode(code: string): Promise<{
   }
 
   if (new Date(data.expires_at) < new Date()) {
-    await supabase.from("device_codes").delete().eq("code", code);
+    await (supabase.from("device_codes") as any).delete().eq("code", code);
     return { status: "expired" };
   }
 
   if (data.status === "approved" && data.api_key) {
     const key = data.api_key;
     // Delete after retrieval — key is shown only once
-    await supabase.from("device_codes").delete().eq("code", code);
+    await (supabase.from("device_codes") as any).delete().eq("code", code);
     return { status: "approved", apiKey: key };
   }
 
@@ -55,8 +54,7 @@ export async function approveDeviceCode(
 ): Promise<{ success: boolean; error?: string }> {
   console.log(`[cli-auth] approve: code=${code.slice(0, 8)}... userId=${userId}`);
 
-  const { data, error: fetchError } = await supabase
-    .from("device_codes")
+  const { data, error: fetchError } = await (supabase.from("device_codes") as any)
     .select("status, expires_at")
     .eq("code", code)
     .single();
@@ -66,7 +64,7 @@ export async function approveDeviceCode(
   if (!data) return { success: false, error: "Code not found" };
 
   if (new Date(data.expires_at) < new Date()) {
-    await supabase.from("device_codes").delete().eq("code", code);
+    await (supabase.from("device_codes") as any).delete().eq("code", code);
     return { success: false, error: "Code expired" };
   }
 
@@ -80,18 +78,17 @@ export async function approveDeviceCode(
   const keyPrefix = rawKey.slice(0, 11); // "vas_sk_xxxx"
 
   // Store API key in DB
-  const { error } = await supabase.from("api_keys").insert({
+  const { error } = await (supabase.from("api_keys") as any).insert({
     user_id: userId,
     key_hash: keyHash,
     key_prefix: keyPrefix,
     name: "CLI",
-  } as any);
+  });
 
   if (error) return { success: false, error: error.message };
 
   // Mark code as approved with the raw key
-  await supabase
-    .from("device_codes")
+  await (supabase.from("device_codes") as any)
     .update({ status: "approved", user_id: userId, api_key: rawKey })
     .eq("code", code);
 
@@ -103,8 +100,7 @@ export async function approveDeviceCode(
 export async function verifyApiKey(key: string): Promise<{ userId: string } | null> {
   const keyHash = crypto.createHash("sha256").update(key).digest("hex");
 
-  const { data, error } = await supabase
-    .from("api_keys")
+  const { data, error } = await (supabase.from("api_keys") as any)
     .select("user_id")
     .eq("key_hash", keyHash)
     .single();
@@ -117,5 +113,5 @@ export async function verifyApiKey(key: string): Promise<{ userId: string } | nu
     .eq("key_hash", keyHash)
     .then(() => {});
 
-  return { userId: (data as any).user_id };
+  return { userId: data.user_id };
 }
