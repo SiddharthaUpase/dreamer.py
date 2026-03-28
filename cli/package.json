@@ -1,6 +1,6 @@
 {
   "name": "dreamer-py",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "CLI for Dreamer — an AI-powered app builder",
   "type": "module",
   "bin": {
@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/cli.ts"
+    "dev": "tsx src/app.tsx",
+    "dev:legacy": "tsx src/cli.ts"
   },
   "files": [
     "dist"
@@ -30,7 +31,13 @@
     "node": ">=18"
   },
   "dependencies": {
-    "dotenv": "^16.4.7"
+    "@types/react": "^19.2.14",
+    "dotenv": "^16.4.7",
+    "ink": "^6.8.0",
+    "ink-select-input": "^6.2.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.4"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

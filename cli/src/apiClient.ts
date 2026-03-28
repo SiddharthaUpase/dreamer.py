@@ -34,9 +34,14 @@ export class ApiClient {
   private baseUrl: string;
   private apiKey: string;
 
-  constructor(opts: ApiClientOptions) {
-    this.baseUrl = opts.baseUrl;
-    this.apiKey = opts.apiKey;
+  constructor(baseUrlOrOpts: string | ApiClientOptions, apiKey?: string) {
+    if (typeof baseUrlOrOpts === "string") {
+      this.baseUrl = baseUrlOrOpts;
+      this.apiKey = apiKey!;
+    } else {
+      this.baseUrl = baseUrlOrOpts.baseUrl;
+      this.apiKey = baseUrlOrOpts.apiKey;
+    }
   }
 
   private headers(extra?: Record<string, string>): Record<string, string> {
@@ -47,7 +52,7 @@ export class ApiClient {
     };
   }
 
-  private async request<T>(method: string, path: string, body?: any): Promise<T> {
+  private async _request<T>(method: string, path: string, body?: any): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers: this.headers(),
@@ -60,28 +65,43 @@ export class ApiClient {
     return res.json() as T;
   }
 
+  // Public fetch wrapper for custom requests
+  async request(path: string, init?: RequestInit): Promise<Response> {
+    return fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers: {
+        ...this.headers(),
+        ...(init?.headers as Record<string, string> || {}),
+      },
+    });
+  }
+
+  // Aliases for Ink components
+  chatStream = this.chat.bind(this);
+  deployStream = this.deploy.bind(this);
+
   // ===== Projects =====
 
   async createProject(id: string, name: string, template = "nextjs"): Promise<{ project: ApiProject }> {
-    return this.request("POST", "/api/projects", { id, name, template });
+    return this._request("POST", "/api/projects", { id, name, template });
   }
 
   async listProjects(): Promise<{ projects: ApiProject[] }> {
-    return this.request("GET", "/api/projects");
+    return this._request("GET", "/api/projects");
   }
 
   async getProject(id: string): Promise<{ project: ApiProject }> {
-    return this.request("GET", `/api/projects/${id}`);
+    return this._request("GET", `/api/projects/${id}`);
   }
 
   async deleteProject(id: string): Promise<void> {
-    await this.request("DELETE", `/api/projects/${id}`);
+    await this._request("DELETE", `/api/projects/${id}`);
   }
 
   // ===== Connect =====
 
   async connect(projectId: string): Promise<ConnectResult> {
-    return this.request("POST", `/api/projects/${projectId}/connect`);
+    return this._request("POST", `/api/projects/${projectId}/connect`);
   }
 
   // ===== Chat (SSE) =====
@@ -133,15 +153,15 @@ export class ApiClient {
   // ===== History =====
 
   async getHistory(projectId: string): Promise<{ messages: any[] }> {
-    return this.request("GET", `/api/projects/${projectId}/history`);
+    return this._request("GET", `/api/projects/${projectId}/history`);
   }
 
   async clearHistory(projectId: string): Promise<void> {
-    await this.request("DELETE", `/api/projects/${projectId}/history`);
+    await this._request("DELETE", `/api/projects/${projectId}/history`);
   }
 
   async compactHistory(projectId: string): Promise<{ before: number; after: number }> {
-    return this.request("POST", `/api/projects/${projectId}/compact`);
+    return this._request("POST", `/api/projects/${projectId}/compact`);
   }
 
   // ===== Deploy (SSE) =====
