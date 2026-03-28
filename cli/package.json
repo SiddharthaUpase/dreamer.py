@@ -1,10 +1,10 @@
 {
   "name": "dreamer-py",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "CLI for Dreamer — an AI-powered app builder",
   "type": "module",
   "bin": {
-    "dreamer": "dist/cli.js"
+    "dreamer": "dist/app.js"
   },
   "scripts": {
     "build": "tsc",
