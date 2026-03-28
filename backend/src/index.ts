@@ -491,9 +491,18 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
     // Persist messages
     if (result.newMessages.length > 0) {
       try {
-        const dbRows = result.newMessages.map((m) => langChainToDbRow(m, pid));
-        await saveMessages(dbRows);
-        console.log(`\x1b[2m[chat]\x1b[0m persisted ${dbRows.length} messages`);
+        if ((result as any).compactedHistory) {
+          // Pre-run compaction happened — replace all old messages with compacted history
+          // This prevents the same 160k+ history from triggering compaction on every message
+          await deleteProjectMessages(pid);
+          const dbRows = (result as any).compactedHistory.map((m: any) => langChainToDbRow(m, pid));
+          await saveMessages(dbRows);
+          console.log(`\x1b[2m[chat]\x1b[0m compacted: replaced history with ${dbRows.length} messages`);
+        } else {
+          const dbRows = result.newMessages.map((m) => langChainToDbRow(m, pid));
+          await saveMessages(dbRows);
+          console.log(`\x1b[2m[chat]\x1b[0m persisted ${dbRows.length} messages`);
+        }
       } catch (err: any) {
         console.error(`\x1b[31m[chat]\x1b[0m failed to persist:`, err.message);
       }
