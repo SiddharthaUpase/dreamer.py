@@ -25,30 +25,30 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
   const { pathname } = request.nextUrl;
 
-  // Allow access to /login, /auth/callback, and static assets
-  const isPublic =
-    pathname === "/login" ||
+  // Allowed pages: home (dashboard), auth, login, static assets
+  const isAllowed =
+    pathname === "/" ||
     pathname.startsWith("/auth/") ||
+    pathname === "/login" ||
     pathname.startsWith("/_next/") ||
     pathname.startsWith("/favicon");
 
-  if (!user && !isPublic) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
-  }
-
-  // Redirect logged-in users away from /login
-  if (user && pathname === "/login") {
+  if (!isAllowed) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
+  }
+
+  // Protect dashboard — redirect to login if not authenticated
+  if (pathname === "/") {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      return NextResponse.redirect(url);
+    }
   }
 
   return supabaseResponse;

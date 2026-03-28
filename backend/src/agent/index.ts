@@ -12,6 +12,7 @@ import {
 import type { ToolCall } from "@langchain/core/messages/tool";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { SandboxInstance } from "@blaxel/core";
+import { neon } from "@neondatabase/serverless";
 import { createTools, isImagePath, isPdfPath, getMimeType, type TodoItem, type DatabaseConfig, type SubagentConfig, type DeployConfig } from "./tools.js";
 export type { DatabaseConfig, DeployConfig } from "./tools.js";
 import type { StoredMessage } from "../services/projectStore.js";
@@ -341,6 +342,42 @@ export function sanitizeHistory(messages: BaseMessage[]): BaseMessage[] {
   flushPending();
 
   return result;
+}
+
+// ===== Database schema introspection =====
+
+async function getDbSchema(dbConfig?: DatabaseConfig): Promise<string> {
+  if (!dbConfig?.connectionString) return "";
+  try {
+    const sql = neon(dbConfig.connectionString);
+    const rows = await sql`
+      SELECT table_name, column_name, data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+      ORDER BY table_name, ordinal_position
+    `;
+    if (rows.length === 0) return "## Database Schema\nNo tables exist yet. Use the `run_sql` tool to create tables.";
+
+    const tables = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const list = tables.get(row.table_name) || [];
+      list.push(row);
+      tables.set(row.table_name, list);
+    }
+
+    const lines = ["## Database Schema (PostgreSQL)"];
+    for (const [table, columns] of tables) {
+      lines.push(`\n### ${table}`);
+      for (const col of columns) {
+        const nullable = col.is_nullable === "YES" ? "nullable" : "NOT NULL";
+        const def = col.column_default ? `, default: ${col.column_default}` : "";
+        lines.push(`- \`${col.column_name}\`: ${col.data_type} (${nullable}${def})`);
+      }
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
 }
 
 // ===== Context assembly =====
@@ -715,14 +752,16 @@ export async function runAgentStream(
 
   await sandbox.process.exec({ command: "mkdir -p /app/outputs", waitForCompletion: true });
 
-  const [fileTree, serverContext] = await Promise.all([
+  const [fileTree, serverContext, dbSchema] = await Promise.all([
     getFileTree(sandbox),
     getRunningServerContext(sandbox),
+    getDbSchema(dbConfig),
   ]);
 
   let systemPromptText = SYSTEM_PROMPT;
   if (previewUrl) systemPromptText += `\n\n## Sandbox Preview URL\nThe dev server's public preview URL is: ${previewUrl}\nALWAYS use this URL when taking screenshots of the app with url_fetch. Do NOT use localhost or internal sandbox URLs — they are not reachable by external tools.`;
   if (serverContext) systemPromptText += `\n\n${serverContext}`;
+  if (dbSchema) systemPromptText += `\n\n${dbSchema}`;
   if (fileTree) systemPromptText += `\n\n${fileTree}`;
 
   const systemMsg = new SystemMessage(systemPromptText);

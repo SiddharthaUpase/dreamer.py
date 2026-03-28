@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "dotenv/config";
 import readline, { emitKeypressEvents } from "readline";
 import fs from "fs";
 import path from "path";
@@ -68,7 +69,7 @@ async function cliLogin(): Promise<string> {
   if (!startRes.ok) throw new Error("Failed to start auth flow. Is the backend running?");
   const { code } = await startRes.json() as { code: string };
 
-  const authUrl = `${APP_URL}/auth/cli?code=${code}`;
+  const authUrl = `${APP_URL}/auth/cli?cli_code=${code}`;
   console.log(dim(`\nOpening browser at ${cyan(authUrl)}`));
   console.log(dim("If it didn't open, visit the URL manually.\n"));
 
@@ -543,6 +544,8 @@ async function handleInput(line: string, rl: readline.Interface) {
 // ===== Main =====
 async function main() {
   console.log(bold("Dreamer CLI\n"));
+  console.log(dim(`Backend: ${BACKEND_URL}`));
+  console.log(dim(`App:     ${APP_URL}\n`));
 
   // Auth check
   let apiKey = getApiKey();

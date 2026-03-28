@@ -93,37 +93,59 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
 
   // Try API key first (CLI auth)
   if (token.startsWith("vas_sk_")) {
+    console.log(`[auth] API key auth attempt: ${token.slice(0, 12)}...`);
     const result = await verifyApiKey(token);
     if (result) {
+      console.log(`[auth] API key valid, userId: ${result.userId}`);
       req.userId = result.userId;
       next();
       return;
     }
+    console.log(`[auth] API key invalid`);
     res.status(401).json({ error: "Invalid API key" });
     return;
   }
 
   // Fall back to Supabase JWT (web app auth)
+  console.log(`[auth] JWT auth attempt`);
   const user = await verifyUser(token);
   if (!user) {
+    console.log(`[auth] JWT invalid`);
     res.status(401).json({ error: "Invalid or expired token" });
     return;
   }
+  console.log(`[auth] JWT valid, userId: ${user.id}`);
   req.userId = user.id;
   next();
 }
 
 // ===== Sandbox helpers =====
 async function getProjectSandbox(projectId: string): Promise<SandboxInstance> {
+  console.log(`[sandbox] getProjectSandbox("${projectId}")`);
+
   const stored = await getProject(projectId);
+  console.log(`[sandbox] stored project:`, stored ? { sandbox_id: stored.sandbox_id, template: stored.template } : "null");
+
   if (stored?.sandbox_id) {
+    console.log(`[sandbox] trying getSandbox("${projectId}")...`);
     try {
-      return await getSandbox(projectId);
-    } catch { /* fall through to create */ }
+      const sb = await getSandbox(projectId);
+      console.log(`[sandbox] getSandbox succeeded: ${sb.metadata?.name}`);
+      return sb;
+    } catch (err: any) {
+      console.error(`[sandbox] getSandbox failed:`, { code: err.code, message: err.message, status_code: err.status_code });
+      /* fall through to create */
+    }
   }
 
   const template = stored?.template || "nextjs";
+  console.log(`[sandbox] creating new sandbox, template="${template}"...`);
+  console.log(`[sandbox] BL_API_KEY=${process.env.BL_API_KEY?.slice(0, 15)}...`);
+  console.log(`[sandbox] BL_WORKSPACE=${process.env.BL_WORKSPACE}`);
+
   const sandbox = await createSandbox(projectId, template);
+  console.log(`[sandbox] createSandbox succeeded: ${sandbox.metadata?.name}`);
+
   if (stored) {
     await updateProject(projectId, { sandbox_id: sandbox.metadata?.name || `proj-${projectId}` });
   }
@@ -145,14 +167,14 @@ app.post("/api/projects/:id/close", (_req, res) => {
 // ===== CLI Auth (no auth required) =====
 
 // Start device code flow
-app.post("/api/auth/cli/start", (_req, res) => {
-  const { code } = createDeviceCode();
+app.post("/api/auth/cli/start", async (_req, res) => {
+  const { code } = await createDeviceCode();
   res.json({ code });
 });
 
 // CLI polls this until approved
-app.get("/api/auth/cli/poll/:code", (req, res) => {
-  const result = pollDeviceCode(req.params.code);
+app.get("/api/auth/cli/poll/:code", async (req, res) => {
+  const result = await pollDeviceCode(req.params.code);
   res.json(result);
 });
 
@@ -288,11 +310,25 @@ app.delete("/api/projects/:id", async (req: AuthRequest, res) => {
 // Connect to project — wake sandbox, inject env/skills, return preview URL
 app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
   const pid = paramId(req);
+  console.log(`[connect] project=${pid} userId=${req.userId}`);
   try {
     const project = await getOwnedProject(pid, req.userId!);
-    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    if (!project) {
+      console.log(`[connect] project not found or not owned by user`);
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    console.log(`[connect] project found, owner=${project.user_id}`);
 
-    const sandbox = await getProjectSandbox(pid);
+    console.log(`[connect] getting/creating sandbox...`);
+    let sandbox;
+    try {
+      sandbox = await getProjectSandbox(pid);
+      console.log(`[connect] sandbox ready: ${sandbox.metadata?.name}`);
+    } catch (sbErr: any) {
+      console.error(`[connect] sandbox error:`, sbErr);
+      throw sbErr;
+    }
 
     // Get preview URL
     let previewUrl: string | null = null;

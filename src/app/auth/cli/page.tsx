@@ -13,6 +13,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import TerminalIcon from "@mui/icons-material/Terminal";
+import Link from "@mui/material/Link";
 import lightTheme from "@/theme-light";
 import { createClient } from "@/lib/supabase/client";
 
@@ -20,17 +21,26 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://dreamer-py.o
 
 function CliAuthHandler() {
   const searchParams = useSearchParams();
-  const code = searchParams.get("code");
+  const code = searchParams.get("cli_code");
   const [status, setStatus] = useState<"checking" | "login" | "confirm" | "approving" | "done" | "error">("checking");
   const [error, setError] = useState("");
   const [email, setEmail] = useState("");
 
   const supabase = createClient();
 
+  // Resolve CLI code: from URL param, or restored from sessionStorage after OAuth redirect
+  const cliCode = code || (typeof window !== "undefined" ? sessionStorage.getItem("cli_auth_code") : null);
+
   useEffect(() => {
-    if (!code) {
-      setStatus("error");
-      setError("No authorization code provided.");
+    if (!cliCode) {
+      // Check if CLI auth was just completed
+      if (typeof window !== "undefined" && sessionStorage.getItem("cli_auth_done")) {
+        sessionStorage.removeItem("cli_auth_done");
+        setStatus("done");
+      } else {
+        setStatus("error");
+        setError("No authorization code provided. Please start login from the CLI.");
+      }
       return;
     }
 
@@ -43,12 +53,18 @@ function CliAuthHandler() {
         setStatus("login");
       }
     });
-  }, [code]);
+  }, [cliCode]);
 
   const handleLogin = async () => {
+    // Stash CLI code before OAuth redirect — URL params get lost during the flow
+    if (cliCode) sessionStorage.setItem("cli_auth_code", cliCode);
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/cli?code=${code}` },
+      options: {
+        redirectTo: `${window.location.origin}/auth/cli`,
+        queryParams: { prompt: "select_account" },
+      },
     });
     if (error) {
       setError(error.message);
@@ -73,7 +89,7 @@ function CliAuthHandler() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code: cliCode }),
       });
 
       if (!res.ok) {
@@ -81,6 +97,8 @@ function CliAuthHandler() {
         throw new Error(data.error || "Failed to approve");
       }
 
+      sessionStorage.removeItem("cli_auth_code");
+      sessionStorage.setItem("cli_auth_done", "1");
       setStatus("done");
     } catch (err: any) {
       setError(err.message);
@@ -128,7 +146,7 @@ function CliAuthHandler() {
           {status === "login" && (
             <>
               <Typography variant="body2" color="text.secondary" mb={1}>
-                Code: <strong>{code}</strong>
+                Code: <strong>{cliCode}</strong>
               </Typography>
               <Typography variant="body2" color="text.secondary" mb={3}>
                 Sign in to authorize the CLI on your account.
@@ -147,10 +165,10 @@ function CliAuthHandler() {
           {status === "confirm" && (
             <>
               <Typography variant="body2" color="text.secondary" mb={1}>
-                Code: <strong>{code}</strong>
+                Code: <strong>{cliCode}</strong>
               </Typography>
               <Typography variant="body2" color="text.secondary" mb={3}>
-                The Agent VAS CLI is requesting access to your account
+                The Dreamer CLI is requesting access to your account
                 {email ? ` (${email})` : ""}.
               </Typography>
               <Button
@@ -162,9 +180,27 @@ function CliAuthHandler() {
               >
                 Allow Access
               </Button>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" color="text.secondary" display="block" mb={1}>
                 This will generate an API key for CLI access.
               </Typography>
+              <Link
+                component="button"
+                variant="caption"
+                onClick={async () => {
+                  await supabase.auth.signOut();
+                  if (cliCode) sessionStorage.setItem("cli_auth_code", cliCode);
+                  await supabase.auth.signInWithOAuth({
+                    provider: "google",
+                    options: {
+                      redirectTo: `${window.location.origin}/auth/cli`,
+                      queryParams: { prompt: "select_account" },
+                    },
+                  });
+                }}
+                sx={{ cursor: "pointer" }}
+              >
+                Use a different account
+              </Link>
             </>
           )}
 
@@ -183,9 +219,12 @@ function CliAuthHandler() {
               <Typography variant="h6" fontWeight={600} color="success.main" mb={1}>
                 CLI Authorized
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" color="text.secondary" mb={2}>
                 You can close this window and return to your terminal.
               </Typography>
+              <Link href="/" variant="body2" sx={{ cursor: "pointer" }}>
+                Go to Dashboard
+              </Link>
             </Box>
           )}
 

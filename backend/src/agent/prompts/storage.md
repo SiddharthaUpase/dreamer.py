@@ -1,25 +1,20 @@
 # File Storage (Cloudflare R2)
 
-This project has an S3-compatible object storage bucket for file uploads (images, documents, etc.).
+S3-compatible object storage for file uploads. Install `@aws-sdk/client-s3` (no other S3 packages needed).
 
-## Required packages
+## Critical: server-side uploads only
 
-```bash
-npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
-```
+The R2 bucket has NO CORS configuration. Browser-direct uploads to R2 will fail.
+Always use this flow: `Browser → FormData POST to /api/upload → API route buffers file → PutObject to R2 → return public URL`
 
-## Environment variables
+## Environment variables (already in `.env.local`)
 
-All of these are already available in `.env.local`:
-- `R2_ACCESS_KEY_ID` — Scoped access key for this project's bucket
-- `R2_SECRET_ACCESS_KEY` — Secret key for this project's bucket
-- `R2_PUBLIC_URL` — Public URL for serving uploaded files (e.g. `https://pub-xxx.r2.dev`)
-- `R2_ENDPOINT` — R2 S3-compatible endpoint
-- `R2_BUCKET_NAME` — This project's bucket name
+- `R2_ENDPOINT` — S3-compatible endpoint
+- `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` — scoped credentials
+- `R2_BUCKET_NAME` — bucket name
+- `R2_PUBLIC_URL` — public serving URL, use as `${R2_PUBLIC_URL}/${key}`
 
-## S3 Client setup
-
-Create a shared S3 client at `lib/storage.ts`:
+## S3 Client (`lib/storage.ts`)
 
 ```ts
 import { S3Client } from '@aws-sdk/client-s3';
@@ -36,75 +31,9 @@ export const s3 = new S3Client({
 export const BUCKET = process.env.R2_BUCKET_NAME!;
 ```
 
-## Upload a file (server-side only)
+## Upload API route (`app/api/upload/route.ts`)
 
 ```ts
-import { PutObjectCommand } from '@aws-sdk/client-s3';
-import { s3, BUCKET } from '@/lib/storage';
-
-export async function uploadFile(key: string, body: Buffer, contentType: string) {
-  await s3.send(new PutObjectCommand({
-    Bucket: BUCKET,
-    Key: key,
-    Body: body,
-    ContentType: contentType,
-  }));
-  // Return the public URL for serving the file
-  return `${process.env.R2_PUBLIC_URL}/${key}`;
-}
-```
-
-## Generate a presigned upload URL (for client-side uploads)
-
-```ts
-import { PutObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { s3, BUCKET } from '@/lib/storage';
-
-export async function getUploadUrl(key: string, contentType: string) {
-  const command = new PutObjectCommand({
-    Bucket: BUCKET,
-    Key: key,
-    ContentType: contentType,
-  });
-  return getSignedUrl(s3, command, { expiresIn: 3600 });
-}
-```
-
-## Download / read a file
-
-```ts
-import { GetObjectCommand } from '@aws-sdk/client-s3';
-import { s3, BUCKET } from '@/lib/storage';
-
-export async function getFile(key: string) {
-  const res = await s3.send(new GetObjectCommand({
-    Bucket: BUCKET,
-    Key: key,
-  }));
-  return res.Body;
-}
-```
-
-## List files
-
-```ts
-import { ListObjectsV2Command } from '@aws-sdk/client-s3';
-import { s3, BUCKET } from '@/lib/storage';
-
-export async function listFiles(prefix?: string) {
-  const res = await s3.send(new ListObjectsV2Command({
-    Bucket: BUCKET,
-    Prefix: prefix,
-  }));
-  return res.Contents || [];
-}
-```
-
-## API route example: file upload
-
-```ts
-// app/api/upload/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { s3, BUCKET } from '@/lib/storage';
@@ -124,13 +53,13 @@ export async function POST(req: NextRequest) {
     ContentType: file.type,
   }));
 
-  return NextResponse.json({ key, url: `${process.env.R2_PUBLIC_URL}/${key}` });
+  return NextResponse.json({ url: `${process.env.R2_PUBLIC_URL}/${key}` });
 }
 ```
 
-## Critical rules
+## Rules
 
-- **ALL storage operations MUST be server-side** (API routes, Server Actions). NEVER expose R2 credentials to the client.
-- Use presigned URLs if the client needs to upload directly.
-- Use meaningful key prefixes: `uploads/`, `avatars/`, `documents/`, etc.
+- **ALL uploads server-side.** Never presigned URLs, never browser-direct to R2.
+- Use key prefixes: `uploads/`, `avatars/`, `documents/`, etc.
 - Always set `ContentType` when uploading.
+- For download/list/delete, use standard `GetObjectCommand`, `ListObjectsV2Command`, `DeleteObjectCommand` from `@aws-sdk/client-s3`.

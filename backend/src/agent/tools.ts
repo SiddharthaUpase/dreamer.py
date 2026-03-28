@@ -834,7 +834,10 @@ export function createTools(sandbox: SandboxInstance, onTodoUpdate?: OnTodoUpdat
       description:
         "Execute SQL queries on the project's PostgreSQL database (Neon). " +
         "Use this to create tables, alter schemas, insert seed data, etc. " +
-        "The query runs with full admin privileges. Supports any valid PostgreSQL SQL.",
+        "The query runs with full admin privileges. Supports any valid PostgreSQL SQL. " +
+        "The current database schema is provided in the system context. Before creating tables, check if they already exist there. " +
+        "You can also query information_schema for detailed introspection. " +
+        "After any CREATE, ALTER, DROP, INSERT, UPDATE, or DELETE, always run a follow-up query to verify the change was applied correctly.",
       schema: z.object({
         query: z.string().describe("The SQL query to execute"),
       }),

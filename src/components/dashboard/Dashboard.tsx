@@ -16,6 +16,8 @@ import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import ProjectCard from "./ProjectCard";
 import NewProjectDialog from "./NewProjectDialog";
 
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://dreamer-py.onrender.com";
+
 interface Project {
   id: string;
   name: string;
@@ -59,7 +61,7 @@ export default function Dashboard() {
 
       try {
         const headers = await getAuthHeaders();
-        const res = await fetch("http://localhost:3001/api/projects", { headers });
+        const res = await fetch(`${BACKEND_URL}/api/projects`, { headers });
         const data = await res.json();
         setProjects(data.projects || []);
       } catch { /* ignore */ }
@@ -70,7 +72,7 @@ export default function Dashboard() {
   async function handleDelete(id: string) {
     try {
       const headers = await getAuthHeaders();
-      await fetch(`http://localhost:3001/api/projects/${id}`, {
+      await fetch(`${BACKEND_URL}/api/projects/${id}`, {
         method: "DELETE",
         headers,
       });
@@ -81,7 +83,7 @@ export default function Dashboard() {
   async function handleCreate(name: string, template: string) {
     const id = `proj_${Date.now()}`;
     const headers = await getAuthHeaders();
-    await fetch("http://localhost:3001/api/projects", {
+    await fetch(`${BACKEND_URL}/api/projects`, {
       method: "POST",
       headers,
       body: JSON.stringify({ id, name, template }),
@@ -127,7 +129,7 @@ export default function Dashboard() {
             <Typography sx={{ color: "#fff", fontWeight: 800, fontSize: "0.75rem" }}>A</Typography>
           </Box>
           <Typography variant="subtitle1" fontWeight={700} sx={{ color: "text.primary", letterSpacing: "-0.02em" }}>
-            agent-vas
+            Dreamer
           </Typography>
         </Box>
 
@@ -266,7 +268,7 @@ export default function Dashboard() {
                 <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={project.id}>
                   <ProjectCard
                     project={{ ...project, lastEdited: timeAgo(project.created_at) }}
-                    onClick={() => router.push(`/projects/${project.id}`)}
+                    onClick={() => {}}
                     onDelete={handleDelete}
                   />
                 </Grid>

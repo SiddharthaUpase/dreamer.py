@@ -1,58 +1,48 @@
 import crypto from "crypto";
 import { supabase } from "./supabase.js";
 
-// ===== In-memory device code store =====
-// In production, use Redis or a DB table. For now, memory is fine.
-interface DeviceCode {
-  code: string;
-  status: "pending" | "approved" | "expired";
-  userId?: string;
-  apiKey?: string; // raw key, only available once
-  expiresAt: number;
-}
+const CODE_TTL_MINUTES = 15;
 
-const deviceCodes = new Map<string, DeviceCode>();
-const CODE_TTL = 5 * 60 * 1000; // 5 minutes
+// ===== Device code flow (Supabase-backed) =====
 
-// Clean up expired codes every minute
-setInterval(() => {
-  const now = Date.now();
-  for (const [code, data] of deviceCodes) {
-    if (now > data.expiresAt) deviceCodes.delete(code);
-  }
-}, 60_000);
+export async function createDeviceCode(): Promise<{ code: string }> {
+  const code = crypto.randomBytes(16).toString("hex");
+  const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60 * 1000).toISOString();
 
-// ===== Device code flow =====
-
-export function createDeviceCode(): { code: string } {
-  // Short human-readable code (4 chars)
-  const code = crypto.randomBytes(2).toString("hex");
-
-  deviceCodes.set(code, {
+  const { error } = await supabase.from("device_codes").insert({
     code,
     status: "pending",
-    expiresAt: Date.now() + CODE_TTL,
+    expires_at: expiresAt,
   });
 
+  console.log(`[cli-auth] createDeviceCode: code=${code.slice(0, 8)}... error=${error?.message || "none"}`);
   return { code };
 }
 
-export function pollDeviceCode(code: string): {
+export async function pollDeviceCode(code: string): Promise<{
   status: "pending" | "approved" | "expired" | "not_found";
   apiKey?: string;
-} {
-  const data = deviceCodes.get(code);
-  if (!data) return { status: "not_found" };
+}> {
+  const { data, error } = await supabase
+    .from("device_codes")
+    .select("status, api_key, expires_at")
+    .eq("code", code)
+    .single();
 
-  if (Date.now() > data.expiresAt) {
-    deviceCodes.delete(code);
+  if (!data) {
+    console.log(`[cli-auth] poll: code=${code.slice(0, 8)}... NOT FOUND (error=${error?.message || "none"})`);
+    return { status: "not_found" };
+  }
+
+  if (new Date(data.expires_at) < new Date()) {
+    await supabase.from("device_codes").delete().eq("code", code);
     return { status: "expired" };
   }
 
-  if (data.status === "approved" && data.apiKey) {
-    const key = data.apiKey;
+  if (data.status === "approved" && data.api_key) {
+    const key = data.api_key;
     // Delete after retrieval — key is shown only once
-    deviceCodes.delete(code);
+    await supabase.from("device_codes").delete().eq("code", code);
     return { status: "approved", apiKey: key };
   }
 
@@ -63,11 +53,20 @@ export async function approveDeviceCode(
   code: string,
   userId: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const data = deviceCodes.get(code);
+  console.log(`[cli-auth] approve: code=${code.slice(0, 8)}... userId=${userId}`);
+
+  const { data, error: fetchError } = await supabase
+    .from("device_codes")
+    .select("status, expires_at")
+    .eq("code", code)
+    .single();
+
+  console.log(`[cli-auth] approve lookup: data=${JSON.stringify(data)} error=${fetchError?.message || "none"}`);
+
   if (!data) return { success: false, error: "Code not found" };
 
-  if (Date.now() > data.expiresAt) {
-    deviceCodes.delete(code);
+  if (new Date(data.expires_at) < new Date()) {
+    await supabase.from("device_codes").delete().eq("code", code);
     return { success: false, error: "Code expired" };
   }
 
@@ -80,7 +79,7 @@ export async function approveDeviceCode(
   const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex");
   const keyPrefix = rawKey.slice(0, 11); // "vas_sk_xxxx"
 
-  // Store in DB
+  // Store API key in DB
   const { error } = await supabase.from("api_keys").insert({
     user_id: userId,
     key_hash: keyHash,
@@ -91,9 +90,10 @@ export async function approveDeviceCode(
   if (error) return { success: false, error: error.message };
 
   // Mark code as approved with the raw key
-  data.status = "approved";
-  data.userId = userId;
-  data.apiKey = rawKey;
+  await supabase
+    .from("device_codes")
+    .update({ status: "approved", user_id: userId, api_key: rawKey })
+    .eq("code", code);
 
   return { success: true };
 }
