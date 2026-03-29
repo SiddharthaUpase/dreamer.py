@@ -97,9 +97,19 @@ export function ProjectScreen({ api, onSelect }: Props) {
   }
 
   async function createProject(name: string) {
-    const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
+    // Sanitize: lowercase, only alphanumeric and hyphens, no leading/trailing/consecutive hyphens
+    const sanitized = name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
     if (!sanitized) {
-      setError("Invalid project name. Use letters, numbers, and dashes.");
+      setError("Invalid name. Use letters, numbers, and dashes.");
+      return;
+    }
+    // Check for duplicate names
+    if (projects.some((p) => p.name === sanitized)) {
+      setError(`Project "${sanitized}" already exists. Choose a different name.`);
       return;
     }
     await connectToProject(sanitized);
@@ -181,6 +191,7 @@ export function ProjectScreen({ api, onSelect }: Props) {
       <Text> </Text>
       <SelectInput
         items={items}
+        initialIndex={Math.max(0, projects.findIndex((p) => p.name === lastProject))}
         onSelect={(item) => {
           if (item.value === "__new__") {
             setPhase("creating");
