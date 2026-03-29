@@ -27,6 +27,7 @@ export interface StoredMessage {
   tool_calls: any[] | null;     // AI messages: [{name, args, id}]
   tool_call_id: string | null;  // Tool messages: links to AI tool_call
   name: string | null;          // Tool messages: tool name
+  user_id: string | null;       // Which user's conversation this belongs to
   created_at: string;
 }
 
@@ -74,12 +75,15 @@ export async function deleteProject(id: string) {
 
 // ===== Messages =====
 
-export async function getProjectMessages(projectId: string): Promise<StoredMessage[]> {
-  const { data, error } = await supabase
+export async function getProjectMessages(projectId: string, userId?: string): Promise<StoredMessage[]> {
+  let query = supabase
     .from("messages")
     .select("*")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: true });
+    .eq("project_id", projectId);
+  if (userId) {
+    query = query.eq("user_id", userId);
+  }
+  const { data, error } = await query.order("created_at", { ascending: true });
   if (error) throw error;
   return data || [];
 }
@@ -103,7 +107,57 @@ export async function saveMessages(msgs: Omit<StoredMessage, "id" | "created_at"
   if (error) throw error;
 }
 
-export async function deleteProjectMessages(projectId: string) {
-  const { error } = await supabase.from("messages").delete().eq("project_id", projectId);
+export async function deleteProjectMessages(projectId: string, userId?: string) {
+  let query = supabase.from("messages").delete().eq("project_id", projectId);
+  if (userId) {
+    query = query.eq("user_id", userId);
+  }
+  const { error } = await query;
   if (error) throw error;
+}
+
+// ===== Collaborators =====
+
+export async function addCollaborator(projectId: string, userId: string, invitedBy: string) {
+  const { error } = await (supabase as any)
+    .from("project_collaborators")
+    .insert({ project_id: projectId, user_id: userId, invited_by: invitedBy });
+  if (error) throw error;
+}
+
+export async function removeCollaborator(projectId: string, userId: string) {
+  const { error } = await (supabase as any)
+    .from("project_collaborators")
+    .delete()
+    .eq("project_id", projectId)
+    .eq("user_id", userId);
+  if (error) throw error;
+}
+
+export async function isCollaborator(projectId: string, userId: string): Promise<boolean> {
+  const { data } = await (supabase as any)
+    .from("project_collaborators")
+    .select("project_id")
+    .eq("project_id", projectId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  return !!data;
+}
+
+export async function getSharedProjects(userId: string): Promise<(StoredProject & { shared: boolean })[]> {
+  const { data: colRows, error } = await (supabase as any)
+    .from("project_collaborators")
+    .select("project_id")
+    .eq("user_id", userId);
+  if (error || !colRows || colRows.length === 0) return [];
+
+  const projectIds = colRows.map((r: any) => r.project_id);
+  const { data: projects, error: pErr } = await supabase
+    .from("projects")
+    .select("*")
+    .in("id", projectIds)
+    .order("created_at", { ascending: false });
+  if (pErr || !projects) return [];
+
+  return projects.map((p: any) => ({ ...p, shared: true }));
 }

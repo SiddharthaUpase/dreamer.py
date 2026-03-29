@@ -1,3 +1,8 @@
+---
+name: storage
+description: Cloudflare R2 file storage — server-side uploads, S3-compatible API, public URLs, and download patterns.
+---
+
 # File Storage (Cloudflare R2)
 
 S3-compatible object storage for file uploads. Install `@aws-sdk/client-s3` (no other S3 packages needed).

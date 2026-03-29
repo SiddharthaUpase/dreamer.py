@@ -16,7 +16,7 @@ import {
   type DatabaseConfig,
   type DeployConfig,
 } from "./agent/index.js";
-import { verifyUser } from "./services/supabase.js";
+import { verifyUser, getUserByEmail } from "./services/supabase.js";
 import {
   getAllProjects,
   getProject,
@@ -26,6 +26,10 @@ import {
   getProjectMessages,
   saveMessages,
   deleteProjectMessages,
+  addCollaborator,
+  removeCollaborator,
+  isCollaborator,
+  getSharedProjects,
 } from "./services/projectStore.js";
 import {
   provisionProject,
@@ -152,11 +156,20 @@ async function getProjectSandbox(projectId: string): Promise<SandboxInstance> {
   return sandbox;
 }
 
-// Verify project ownership
+// Verify project ownership (owner-only operations)
 async function getOwnedProject(projectId: string, userId: string) {
   const project = await getProject(projectId);
   if (!project || project.user_id !== userId) return null;
   return project;
+}
+
+// Check owner OR collaborator access (read/use operations)
+async function getAccessibleProject(projectId: string, userId: string) {
+  const project = await getProject(projectId);
+  if (!project) return null;
+  if (project.user_id === userId) return project;
+  const collab = await isCollaborator(projectId, userId);
+  return collab ? project : null;
 }
 
 // Close project — no-op
@@ -269,11 +282,14 @@ app.post("/api/projects", async (req: AuthRequest, res) => {
   }
 });
 
-// List projects
+// List projects (owned + shared)
 app.get("/api/projects", async (req: AuthRequest, res) => {
   try {
-    const projects = await getAllProjects(req.userId!);
-    res.json({ projects });
+    const [owned, shared] = await Promise.all([
+      getAllProjects(req.userId!),
+      getSharedProjects(req.userId!),
+    ]);
+    res.json({ projects: [...owned, ...shared] });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -282,7 +298,7 @@ app.get("/api/projects", async (req: AuthRequest, res) => {
 // Get project details
 app.get("/api/projects/:id", async (req: AuthRequest, res) => {
   try {
-    const project = await getOwnedProject(paramId(req), req.userId!);
+    const project = await getAccessibleProject(paramId(req), req.userId!);
     if (!project) { res.status(404).json({ error: "Project not found" }); return; }
     res.json({ project });
   } catch (err: any) {
@@ -305,6 +321,64 @@ app.delete("/api/projects/:id", async (req: AuthRequest, res) => {
   }
 });
 
+// Share project with another user (owner only)
+app.post("/api/projects/:id/share", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  const { email } = req.body as { email?: string };
+  if (!email) {
+    res.status(400).json({ error: "email is required" });
+    return;
+  }
+  try {
+    const project = await getOwnedProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+    const target = await getUserByEmail(email.trim().toLowerCase());
+    if (!target) {
+      res.status(404).json({ error: "No account found with that email" });
+      return;
+    }
+    if (target.id === req.userId) {
+      res.status(400).json({ error: "You already own this project" });
+      return;
+    }
+
+    // No-op if already a collaborator (idempotent)
+    const already = await isCollaborator(pid, target.id);
+    if (already) {
+      res.json({ status: "already_shared", email: target.email });
+      return;
+    }
+
+    await addCollaborator(pid, target.id, req.userId!);
+    res.json({ status: "shared", email: target.email });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Leave a shared project (collaborator removes themselves)
+app.delete("/api/projects/:id/collaborator", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  try {
+    const project = await getProject(pid);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    if (project.user_id === req.userId) {
+      res.status(400).json({ error: "Owner cannot leave their own project" });
+      return;
+    }
+    const collab = await isCollaborator(pid, req.userId!);
+    if (!collab) {
+      res.status(404).json({ error: "You are not a collaborator on this project" });
+      return;
+    }
+    await removeCollaborator(pid, req.userId!);
+    res.json({ status: "left" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===== Sandbox / Connect =====
 
 // Connect to project — wake sandbox, inject env/skills, return preview URL
@@ -312,7 +386,7 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
   const pid = paramId(req);
   console.log(`[connect] project=${pid} userId=${req.userId}`);
   try {
-    const project = await getOwnedProject(pid, req.userId!);
+    const project = await getAccessibleProject(pid, req.userId!);
     if (!project) {
       console.log(`[connect] project not found or not owned by user`);
       res.status(404).json({ error: "Project not found" });
@@ -377,7 +451,7 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
       } catch { /* non-critical */ }
     }
 
-    const messages = await getProjectMessages(pid);
+    const messages = await getProjectMessages(pid, req.userId!);
 
     res.json({
       status: "ready",
@@ -397,7 +471,7 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
 app.post("/api/projects/:id/upload", upload.single("file"), async (req: AuthRequest, res) => {
   const pid = paramId(req);
   try {
-    const project = await getOwnedProject(pid, req.userId!);
+    const project = await getAccessibleProject(pid, req.userId!);
     if (!project) { res.status(404).json({ error: "Project not found" }); return; }
 
     const file = req.file;
@@ -431,7 +505,7 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
     return;
   }
 
-  const project = await getOwnedProject(pid, req.userId!);
+  const project = await getAccessibleProject(pid, req.userId!);
   if (!project) { res.status(404).json({ error: "Project not found" }); return; }
 
   console.log(`\x1b[33m[chat]\x1b[0m project=${pid} model=${model || "claude-sonnet"} msg="${message.slice(0, 60)}${message.length > 60 ? "..." : ""}"`);
@@ -458,7 +532,7 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
     console.log(`\x1b[2m[chat]\x1b[0m sandbox connected, loading history...`);
 
     const history = sanitizeHistory(
-      (await getProjectMessages(pid)).map(dbRowToLangChain)
+      (await getProjectMessages(pid, req.userId!)).map(dbRowToLangChain)
     );
     console.log(`\x1b[2m[chat]\x1b[0m ${history.length} history messages, starting agent...`);
 
@@ -494,12 +568,13 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
         if ((result as any).compactedHistory) {
           // Pre-run compaction happened — replace all old messages with compacted history
           // This prevents the same 160k+ history from triggering compaction on every message
-          await deleteProjectMessages(pid);
-          const dbRows = (result as any).compactedHistory.map((m: any) => langChainToDbRow(m, pid));
+          await deleteProjectMessages(pid, req.userId!);
+          const dbRows = (result as any).compactedHistory.map((m: any) => langChainToDbRow(m, pid, req.userId!));
           await saveMessages(dbRows);
+          sendEvent({ type: "compacted", before: history.length, after: dbRows.length });
           console.log(`\x1b[2m[chat]\x1b[0m compacted: replaced history with ${dbRows.length} messages`);
         } else {
-          const dbRows = result.newMessages.map((m) => langChainToDbRow(m, pid));
+          const dbRows = result.newMessages.map((m) => langChainToDbRow(m, pid, req.userId!));
           await saveMessages(dbRows);
           console.log(`\x1b[2m[chat]\x1b[0m persisted ${dbRows.length} messages`);
         }
@@ -531,9 +606,9 @@ app.post("/api/projects/:id/abort", (_req, res) => {
 
 app.get("/api/projects/:id/history", async (req: AuthRequest, res) => {
   try {
-    const project = await getOwnedProject(paramId(req), req.userId!);
+    const project = await getAccessibleProject(paramId(req), req.userId!);
     if (!project) { res.status(404).json({ error: "Project not found" }); return; }
-    const messages = await getProjectMessages(paramId(req));
+    const messages = await getProjectMessages(paramId(req), req.userId!);
     res.json({ messages });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -542,9 +617,9 @@ app.get("/api/projects/:id/history", async (req: AuthRequest, res) => {
 
 app.delete("/api/projects/:id/history", async (req: AuthRequest, res) => {
   try {
-    const project = await getOwnedProject(paramId(req), req.userId!);
+    const project = await getAccessibleProject(paramId(req), req.userId!);
     if (!project) { res.status(404).json({ error: "Project not found" }); return; }
-    await deleteProjectMessages(paramId(req));
+    await deleteProjectMessages(paramId(req), req.userId!);
     res.json({ status: "cleared" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -554,10 +629,10 @@ app.delete("/api/projects/:id/history", async (req: AuthRequest, res) => {
 app.post("/api/projects/:id/compact", async (req: AuthRequest, res) => {
   const pid = paramId(req);
   try {
-    const project = await getOwnedProject(pid, req.userId!);
+    const project = await getAccessibleProject(pid, req.userId!);
     if (!project) { res.status(404).json({ error: "Project not found" }); return; }
 
-    const storedMsgs = await getProjectMessages(pid);
+    const storedMsgs = await getProjectMessages(pid, req.userId!);
     if (storedMsgs.length < 4) {
       res.status(400).json({ error: "Not enough history to compact" });
       return;
@@ -566,12 +641,12 @@ app.post("/api/projects/:id/compact", async (req: AuthRequest, res) => {
     const history = storedMsgs.map(dbRowToLangChain);
     const { human, ai } = await compactHistory(history);
 
-    // Clear old messages and save compacted ones
-    await deleteProjectMessages(pid);
+    // Clear old messages and save compacted ones (scoped to this user)
+    await deleteProjectMessages(pid, req.userId!);
     const now = Date.now();
     await saveMessages([
-      { project_id: pid, role: "human", content: human, tool_calls: null, tool_call_id: null, name: null, created_at: new Date(now).toISOString() } as any,
-      { project_id: pid, role: "ai", content: ai, tool_calls: null, tool_call_id: null, name: null, created_at: new Date(now + 1).toISOString() } as any,
+      { project_id: pid, role: "human", content: human, tool_calls: null, tool_call_id: null, name: null, user_id: req.userId!, created_at: new Date(now).toISOString() } as any,
+      { project_id: pid, role: "ai", content: ai, tool_calls: null, tool_call_id: null, name: null, user_id: req.userId!, created_at: new Date(now + 1).toISOString() } as any,
     ]);
 
     res.json({ status: "compacted", before: storedMsgs.length, after: 2 });
@@ -585,7 +660,7 @@ app.post("/api/projects/:id/compact", async (req: AuthRequest, res) => {
 app.post("/api/projects/:id/deploy", async (req: AuthRequest, res) => {
   const pid = paramId(req);
   try {
-    const project = await getOwnedProject(pid, req.userId!);
+    const project = await getAccessibleProject(pid, req.userId!);
     if (!project) { res.status(404).json({ error: "Project not found" }); return; }
 
     if (!process.env.VERCEL_TOKEN) {

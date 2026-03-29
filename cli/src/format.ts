@@ -22,6 +22,12 @@ export function formatToolArgs(tool: string, args: Record<string, any>): string 
         return `[${args.type || "execute"}${args.use_haiku ? " · haiku" : ""}] ${truncate(args.task || "", 80)}`;
       case "run_sql":
         return truncate(args.query || "", 120);
+      case "deploy":
+        return args.projectName ? `→ ${args.projectName.replace(/^vas-/, "")}` : "deploying...";
+      case "todowrite":
+        return "";
+      case "url_fetch":
+        return truncate(args.url || "", 100);
       default:
         return truncate(JSON.stringify(args), 120);
     }

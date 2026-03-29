@@ -1,3 +1,8 @@
+---
+name: database
+description: Neon PostgreSQL setup, queries with @neondatabase/serverless, run_sql tool, and table design patterns.
+---
+
 # Database (Neon PostgreSQL) — IMPORTANT
 This project has a Neon PostgreSQL database. Use the `run_sql` tool to create tables, insert data, and manage schemas.
 

@@ -12,6 +12,7 @@ interface ApiProject {
   template?: string;
   created_at: string;
   preview_url?: string;
+  shared?: boolean;
 }
 
 interface ProjectInfo {
@@ -55,25 +56,26 @@ export function ProjectScreen({ api, onSelect }: Props) {
     }
   }
 
-  async function connectToProject(name: string) {
+  async function connectToProject(id: string) {
+    const proj = projects.find((p) => p.id === id);
+    const displayName = proj?.name || id;
     setPhase("connecting");
-    setConnectingName(name);
+    setConnectingName(displayName);
     try {
-      const res = await api.request(`/api/projects/${name}/connect`, { method: "POST" });
+      const res = await api.request(`/api/projects/${id}/connect`, { method: "POST" });
       const data = (await res.json()) as any;
 
       if (!res.ok) {
-        // Project not found — create it
         await api.request("/api/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: name, name, template: "nextjs" }),
+          body: JSON.stringify({ id, name: displayName, template: "nextjs" }),
         });
-        const retryRes = await api.request(`/api/projects/${name}/connect`, { method: "POST" });
+        const retryRes = await api.request(`/api/projects/${id}/connect`, { method: "POST" });
         const retryData = (await retryRes.json()) as any;
         onSelect({
-          id: name,
-          name,
+          id,
+          name: displayName,
           previewUrl: retryData.previewUrl,
           messageCount: retryData.messageCount || 0,
           messages: retryData.messages || [],
@@ -82,8 +84,8 @@ export function ProjectScreen({ api, onSelect }: Props) {
       }
 
       onSelect({
-        id: name,
-        name,
+        id,
+        name: data.name || displayName,
         previewUrl: data.previewUrl,
         messageCount: data.messageCount || 0,
         messages: data.messages || [],
@@ -97,7 +99,7 @@ export function ProjectScreen({ api, onSelect }: Props) {
   async function createProject(name: string) {
     const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     if (!sanitized) {
-      setError("Invalid project name.");
+      setError("Invalid project name. Use letters, numbers, and dashes.");
       return;
     }
     await connectToProject(sanitized);
@@ -105,36 +107,54 @@ export function ProjectScreen({ api, onSelect }: Props) {
 
   if (phase === "loading") {
     return (
-      <Text>
-        <Text color="green"><Spinner type="dots" /></Text>
-        {" "}Loading projects...
-      </Text>
+      <Box paddingLeft={2}>
+        <Text color="magenta"><Spinner type="dots" /></Text>
+        <Text> Loading your projects...</Text>
+      </Box>
     );
   }
 
   if (phase === "connecting") {
     return (
-      <Text>
-        <Text color="green"><Spinner type="dots" /></Text>
-        {" "}Connecting to "{connectingName}"...
-      </Text>
+      <Box flexDirection="column" paddingLeft={2}>
+        <Box>
+          <Text color="magenta"><Spinner type="dots" /></Text>
+          <Text> Starting up </Text>
+          <Text bold color="white">{connectingName}</Text>
+          <Text>...</Text>
+        </Box>
+        <Text dimColor>  This may take a moment the first time.</Text>
+      </Box>
     );
   }
 
   if (phase === "creating") {
     return (
-      <Box flexDirection="column">
-        {projects.length === 0 && <Text dimColor>No projects found. Create one to get started.</Text>}
+      <Box flexDirection="column" paddingLeft={2}>
+        {projects.length === 0 ? (
+          <Box flexDirection="column">
+            <Text bold color="white">  Let's create your first project</Text>
+            <Text dimColor>  Give it a name and we'll set everything up for you.</Text>
+            <Text> </Text>
+          </Box>
+        ) : (
+          <Box flexDirection="column">
+            <Text bold color="white">  New project</Text>
+            <Text> </Text>
+          </Box>
+        )}
         <Box>
-          <Text bold>Project name: </Text>
+          <Text color="magenta">  {">"} </Text>
           <TextInput
             value={newName}
             onChange={setNewName}
             onSubmit={(val) => createProject(val)}
-            placeholder="my-app"
+            placeholder="my-awesome-app"
           />
         </Box>
-        {error && <Text color="red">{error}</Text>}
+        {error && (
+          <Text color="red">  {error}</Text>
+        )}
       </Box>
     );
   }
@@ -143,15 +163,21 @@ export function ProjectScreen({ api, onSelect }: Props) {
   const prefs = loadPrefs();
   const lastProject = prefs.lastProject;
 
-  const items = projects.map((p) => ({
-    label: `${p.name === lastProject ? "● " : "  "}${p.name} [${p.template || "nextjs"}] ${p.created_at?.slice(0, 10) || ""}`,
-    value: p.name,
-  }));
-  items.push({ label: "  + Create new project", value: "__new__" });
+  const items = projects.map((p) => {
+    const isLast = p.name === lastProject;
+    const shared = p.shared ? " (shared)" : "";
+    const date = p.created_at?.slice(0, 10) || "";
+    return {
+      key: p.id,
+      label: `${isLast ? "● " : "  "}${p.name}${shared}  ${date}`,
+      value: p.id,
+    };
+  });
+  items.push({ key: "__new__", label: "  + New project", value: "__new__" });
 
   return (
-    <Box flexDirection="column">
-      <Text bold>Select a project:</Text>
+    <Box flexDirection="column" paddingLeft={2}>
+      <Text bold color="white">  Your projects</Text>
       <Text> </Text>
       <SelectInput
         items={items}
@@ -163,7 +189,7 @@ export function ProjectScreen({ api, onSelect }: Props) {
           }
         }}
       />
-      {error && <Text color="red">{error}</Text>}
+      {error && <Text color="red">  {error}</Text>}
     </Box>
   );
 }

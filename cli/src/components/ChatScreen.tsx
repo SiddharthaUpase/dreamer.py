@@ -17,9 +17,17 @@ interface ProjectInfo {
   messages: any[];
 }
 
-interface ChatMessage {
-  type: "user" | "assistant" | "tool" | "error" | "info";
+interface TodoItem {
   content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+interface ChatMessage {
+  type: "user" | "assistant" | "streaming" | "tool" | "error" | "info" | "success" | "todo";
+  content: string;
+  toolName?: string;
+  toolArgs?: Record<string, any>;
+  todos?: TodoItem[];
 }
 
 interface Props {
@@ -31,7 +39,7 @@ interface Props {
   onLogout: () => void;
 }
 
-type Phase = "input" | "streaming" | "model-select";
+type Phase = "input" | "streaming" | "model-select" | "confirm-delete";
 
 type InputPart =
   | { type: "typed"; content: string }
@@ -76,13 +84,13 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     }
     return initial;
   });
-  const [streamText, setStreamText] = useState("");
   const [toolStatus, setToolStatus] = useState("");
   const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   // Batch token updates — accumulate in ref, flush every 50ms
   const tokenBuffer = useRef("");
   const flushTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastToolArgs = useRef<Record<string, any> | null>(null);
 
   const startTokenBatching = useCallback(() => {
     tokenBuffer.current = "";
@@ -91,7 +99,13 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
       if (tokenBuffer.current) {
         const chunk = tokenBuffer.current;
         tokenBuffer.current = "";
-        setStreamText((prev) => prev + chunk);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.type === "streaming") {
+            return [...prev.slice(0, -1), { ...last, content: last.content + chunk }];
+          }
+          return [...prev, { type: "streaming", content: chunk }];
+        });
       }
     }, 50);
   }, []);
@@ -101,11 +115,17 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
       clearInterval(flushTimer.current);
       flushTimer.current = null;
     }
-    // Flush remaining
-    if (tokenBuffer.current) {
-      const chunk = tokenBuffer.current;
-      tokenBuffer.current = "";
-      setStreamText((prev) => prev + chunk);
+    // Flush remaining into streaming message
+    const remaining = tokenBuffer.current;
+    tokenBuffer.current = "";
+    if (remaining) {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.type === "streaming") {
+          return [...prev.slice(0, -1), { ...last, content: last.content + remaining }];
+        }
+        return [...prev, { type: "streaming", content: remaining }];
+      });
     }
   }, []);
 
@@ -139,6 +159,9 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     { name: "/model",    desc: "switch AI model" },
     { name: "/projects", desc: "switch project" },
     { name: "/deploy",   desc: "deploy to Vercel" },
+    { name: "/share",    desc: "share project with another user" },
+    { name: "/leave",    desc: "leave a shared project" },
+    { name: "/delete",   desc: "delete this project" },
     { name: "/help",     desc: "show all commands" },
     { name: "/logout",   desc: "log out" },
     { name: "/exit",     desc: "quit" },
@@ -161,11 +184,54 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     // ESC to abort streaming
     if (key.escape && abortController) {
       abortController.abort();
-      stopTokenBatching();
+      // Stop batching and finalize in one atomic update
+      if (flushTimer.current) { clearInterval(flushTimer.current); flushTimer.current = null; }
+      const abortChunk = tokenBuffer.current;
+      tokenBuffer.current = "";
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.type === "streaming") {
+          const finalContent = last.content + abortChunk;
+          if (finalContent.trim()) {
+            return [...prev.slice(0, -1), { type: "assistant", content: finalContent }];
+          }
+          return prev.slice(0, -1);
+        }
+        if (abortChunk.trim()) {
+          return [...prev, { type: "assistant", content: abortChunk }];
+        }
+        return prev;
+      });
       setAbortController(null);
       setPhase("input");
       setToolStatus("");
       addMessage("info", "Aborted.");
+      return;
+    }
+
+    // Confirm delete: y/n
+    if (phase === "confirm-delete") {
+      if (ch === "y" || ch === "Y") {
+        setPhase("streaming");
+        setToolStatus("Deleting project...");
+        api.request(`/api/projects/${project.id}`, { method: "DELETE" }).then((res) => {
+          setToolStatus("");
+          if (res.ok) {
+            addMessage("success", "Project deleted.");
+            onSwitchProject();
+          } else {
+            res.json().then((d: any) => addMessage("error", d.error || "Delete failed."));
+            setPhase("input");
+          }
+        }).catch((err: any) => {
+          setToolStatus("");
+          addMessage("error", err.message);
+          setPhase("input");
+        });
+      } else {
+        addMessage("info", "Delete cancelled.");
+        setPhase("input");
+      }
       return;
     }
 
@@ -313,7 +379,6 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     addMessage("user", text);
     setScrollOffset(0); // snap to bottom on new message
     setPhase("streaming");
-    setStreamText("");
     setToolStatus("Thinking");
     startTokenBatching();
 
@@ -327,12 +392,39 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
             setToolStatus("");
             tokenBuffer.current += event.content || "";
             break;
-          case "tool_start":
-            setToolStatus(`⚡ ${event.tool} ${formatToolArgs(event.tool, event.args || {})}`);
+          case "tool_start": {
+            // Flush any buffered tokens and convert in-progress streaming message → assistant
+            const pending = tokenBuffer.current;
+            tokenBuffer.current = "";
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last?.type === "streaming") {
+                const finalContent = last.content + pending;
+                if (finalContent.trim()) {
+                  return [...prev.slice(0, -1), { type: "assistant", content: finalContent }];
+                }
+                return prev.slice(0, -1);
+              }
+              if (pending.trim()) {
+                return [...prev, { type: "assistant", content: pending }];
+              }
+              return prev;
+            });
+            const style = TOOL_STYLES[event.tool] || { label: event.tool };
+            const fmtArgs = formatToolArgs(event.tool, event.args || {});
+            lastToolArgs.current = event.args || null;
+            setToolStatus(`${style.label}  ${fmtArgs}`);
             break;
+          }
           case "tool_end": {
-            const output = formatToolOutput(event.tool, event.output || "");
-            addMessage("tool", `✓ ${event.tool}${output ? "\n" + output : ""}`);
+            const rawOutput = event.output || "";
+            const args = lastToolArgs.current;
+            lastToolArgs.current = null;
+            // For write/edit/read, keep raw output — ToolLine renders it specially
+            const content = ["write", "edit", "read"].includes(event.tool)
+              ? rawOutput
+              : formatToolOutput(event.tool, rawOutput);
+            setMessages((prev) => [...prev, { type: "tool", content, toolName: event.tool, toolArgs: args || undefined }]);
             setToolStatus("Thinking");
             break;
           }
@@ -343,15 +435,25 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
             break;
           case "todo_update":
             if (event.todos) {
-              const lines = event.todos.map((t: any) => {
-                const icon = t.status === "completed" ? "✓" : t.status === "in_progress" ? "•" : "✗";
-                return `  ${icon} ${t.content}`;
+              setMessages((prev) => {
+                let idx = -1;
+              for (let i = prev.length - 1; i >= 0; i--) { if (prev[i].type === "todo") { idx = i; break; } }
+                const msg: ChatMessage = { type: "todo", content: "", todos: event.todos };
+                if (idx >= 0) {
+                  const next = [...prev];
+                  next[idx] = msg;
+                  return next;
+                }
+                return [...prev, msg];
               });
-              addMessage("info", `📋 Todos:\n${lines.join("\n")}`);
             }
             break;
           case "subagent_log":
             addMessage("info", `  ${event.label} → ${event.tool} ${event.detail || ""}`);
+            break;
+          case "compacted":
+            setMessages([{ type: "info", content: `Auto-compacted ${event.before} → ${event.after} messages.` }]);
+            setScrollOffset(0);
             break;
         }
       }, controller.signal);
@@ -361,14 +463,26 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
       }
     }
 
-    stopTokenBatching();
-
-    // Flush streaming text as assistant message
-    setStreamText((prev) => {
-      if (prev) {
-        setMessages((msgs) => [...msgs, { type: "assistant", content: prev }]);
+    // Stop batching and finalize streaming → assistant in one atomic update
+    if (flushTimer.current) {
+      clearInterval(flushTimer.current);
+      flushTimer.current = null;
+    }
+    const finalChunk = tokenBuffer.current;
+    tokenBuffer.current = "";
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.type === "streaming") {
+        const finalContent = last.content + finalChunk;
+        if (finalContent.trim()) {
+          return [...prev.slice(0, -1), { type: "assistant", content: finalContent }];
+        }
+        return prev.slice(0, -1);
       }
-      return "";
+      if (finalChunk.trim()) {
+        return [...prev, { type: "assistant", content: finalChunk }];
+      }
+      return prev;
     });
 
     setToolStatus("");
@@ -382,13 +496,19 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     switch (command) {
       case "/clear":
         await api.request(`/api/projects/${project.id}/history`, { method: "DELETE" });
-        addMessage("info", "History cleared.");
+        setMessages([{ type: "info", content: "History cleared." }]);
+        setScrollOffset(0);
         break;
 
       case "/compact": {
+        setPhase("streaming");
+        setToolStatus("Compacting history...");
         const res = await api.request(`/api/projects/${project.id}/compact`, { method: "POST" });
         const data = (await res.json()) as any;
-        addMessage("info", `Compacted ${data.before} → ${data.after} messages.`);
+        setToolStatus("");
+        setPhase("input");
+        setMessages([{ type: "info", content: `Compacted ${data.before} → ${data.after} messages.` }]);
+        setScrollOffset(0);
         break;
       }
 
@@ -431,7 +551,13 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
         try {
           await api.deployStream(project.id, (event: any) => {
             if (event.type === "token") {
-              setStreamText((prev) => prev + (event.content || ""));
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last?.type === "streaming") {
+                  return [...prev.slice(0, -1), { ...last, content: last.content + (event.content || "") }];
+                }
+                return [...prev, { type: "streaming", content: event.content || "" }];
+              });
             } else if (event.type === "error") {
               addMessage("error", event.content || event.message || "Deploy failed");
             } else if (event.url) {
@@ -441,14 +567,70 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
         } catch (err: any) {
           addMessage("error", err.message);
         }
-        setStreamText((prev) => {
-          if (prev) setMessages((msgs) => [...msgs, { type: "info", content: prev }]);
-          return "";
+        // Finalize streaming message
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.type === "streaming") {
+            if (last.content.trim()) return [...prev.slice(0, -1), { type: "info", content: last.content }];
+            return prev.slice(0, -1);
+          }
+          return prev;
         });
         setToolStatus("");
         setPhase("input");
         break;
       }
+
+      case "/share": {
+        const email = args[0];
+        if (!email) {
+          addMessage("info", "Usage: /share <email>");
+          break;
+        }
+        try {
+          const res = await api.request(`/api/projects/${project.id}/share`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email }),
+          });
+          const text = await res.text();
+          let data: any;
+          try { data = JSON.parse(text); } catch { data = {}; }
+          if (!res.ok) {
+            addMessage("error", data.error || `Share failed (${res.status}): ${text}`);
+          } else if (data.status === "already_shared") {
+            addMessage("success", `${data.email} already has access.`);
+          } else {
+            addMessage("success", `Shared with ${data.email || "user"}.`);
+          }
+        } catch (err: any) {
+          addMessage("error", err.message);
+        }
+        break;
+      }
+
+      case "/leave": {
+        try {
+          const res = await api.request(`/api/projects/${project.id}/collaborator`, {
+            method: "DELETE",
+          });
+          const data = (await res.json()) as any;
+          if (!res.ok) {
+            addMessage("error", data.error || "Failed to leave project.");
+          } else {
+            addMessage("success", "Left the project.");
+            onSwitchProject();
+          }
+        } catch (err: any) {
+          addMessage("error", err.message);
+        }
+        break;
+      }
+
+      case "/delete":
+        addMessage("error", `Delete project "${project.name}"? This cannot be undone. (y/N)`);
+        setPhase("confirm-delete");
+        break;
 
       case "/help":
         addMessage("info", [
@@ -460,6 +642,9 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
           "  /model      — switch AI model",
           "  /projects   — switch project",
           "  /deploy     — deploy to Vercel",
+          "  /share      — share project with another user",
+          "  /leave      — leave a shared project",
+          "  /delete     — delete this project",
           "  /logout     — log out",
           "  /exit       — quit",
         ].join("\n"));
@@ -487,11 +672,30 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
 
   // How many display lines each message occupies (approximate, accounts for wrapping)
   function msgLines(msg: ChatMessage): number {
+    if (msg.type === "todo") return (msg.todos?.length ?? 0) + 2;
+    if (msg.type === "tool") {
+      const args = msg.toolArgs;
+      if (msg.toolName === "read" && args?.path && msg.content) {
+        const lines = msg.content.split("\n").length;
+        return 1 + Math.min(lines, READ_PREVIEW_LINES) + (lines > READ_PREVIEW_LINES ? 1 : 0);
+      }
+      if (msg.toolName === "write" && args?.path) {
+        const lines = (args.content || "").split("\n").length;
+        return 1 + Math.min(lines, WRITE_PREVIEW_LINES) + (lines > WRITE_PREVIEW_LINES ? 1 : 0);
+      }
+      if (msg.toolName === "edit" && args?.old_string != null) {
+        const ol = (args.old_string || "").split("\n").length;
+        const nl = (args.new_string || "").split("\n").length;
+        return 1 + Math.min(ol, EDIT_PREVIEW_LINES) + (ol > EDIT_PREVIEW_LINES ? 1 : 0)
+                 + Math.min(nl, EDIT_PREVIEW_LINES) + (nl > EDIT_PREVIEW_LINES ? 1 : 0);
+      }
+      return msg.content ? 2 : 1;
+    }
     return msg.content.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil((line.length || 1) / cols)), 0);
   }
 
-  // Reserve rows: 1 header + 1 stream + 1 tool status + 3 input + 1 bottom padding
-  const reserved = 7;
+  // Reserve rows: 2 header (preview + model) + 1 stream + 1 tool status + 3 input + 1 bottom padding
+  const reserved = project.previewUrl ? 8 : 7;
   const available = Math.max(4, rows - reserved);
 
   // Build cumulative line positions from the end
@@ -516,16 +720,27 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
 
   const hasMoreAbove = windowStart > 0;
 
+  // OSC 8 hyperlink: \x1b]8;;URL\x07LABEL\x1b]8;;\x07
+  const previewLink = project.previewUrl
+    ? `\x1b]8;;${project.previewUrl}\x07${project.previewUrl}\x1b]8;;\x07`
+    : null;
+
   return (
     <Box flexDirection="column">
       {/* Header */}
-      <Box>
-        <Text dimColor>Model: {model} | type /help for commands</Text>
+      <Box flexDirection="column">
+        <Box>
+          <Text bold color="magenta">{project.name}</Text>
+          <Text dimColor>  {model}</Text>
+        </Box>
+        {previewLink && (
+          <Text dimColor>{previewLink}</Text>
+        )}
       </Box>
 
       {/* Scroll indicator */}
       {hasMoreAbove && (
-        <Text dimColor>  ↑ {windowStart} lines above · ↑/↓ to scroll</Text>
+        <Text dimColor>  ↑ {windowStart} more lines ↑</Text>
       )}
 
       {/* Messages */}
@@ -533,15 +748,19 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
         <MessageLine key={i} msg={msg} />
       ))}
 
-      {/* Streaming response */}
-      {streamText && <Text>{streamText}</Text>}
-
       {/* Tool status / spinner */}
       {phase === "streaming" && toolStatus && (
-        <Text dimColor>
-          <Text color="green"><Spinner type="dots" /></Text>
-          {" "}{toolStatus}
-        </Text>
+        toolStatus === "Thinking" ? (
+          <Box>
+            <Text color="magenta"><Spinner type="dots" /></Text>
+            <Text color="magenta" bold>  Dreamer is thinking...</Text>
+          </Box>
+        ) : (
+          <Box>
+            <Text color="magenta"><Spinner type="dots" /></Text>
+            <Text color="white">{"  "}{toolStatus}</Text>
+          </Box>
+        )
       )}
 
       {/* Model picker */}
@@ -559,6 +778,11 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
         </Box>
       )}
 
+      {/* Delete confirmation */}
+      {phase === "confirm-delete" && (
+        <Text dimColor>  Press <Text color="red" bold>y</Text> to confirm, any other key to cancel</Text>
+      )}
+
       {/* Input */}
       {phase === "input" && (
         <Box flexDirection="column">
@@ -568,9 +792,9 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
                 <Box key={s.name}>
                   <Text
                     bold={i === clampedSuggestionIndex}
-                    color={i === clampedSuggestionIndex ? "cyan" : undefined}
+                    color={i === clampedSuggestionIndex ? "magenta" : "white"}
                   >
-                    {i === clampedSuggestionIndex ? "▶ " : "  "}
+                    {i === clampedSuggestionIndex ? "▸ " : "  "}
                     {s.name}
                   </Text>
                   <Text dimColor>{`  ${s.desc}`}</Text>
@@ -579,11 +803,11 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
             </Box>
           )}
           <Box flexDirection="row" flexWrap="wrap">
-            <Text bold color="cyan">{`(${project.name}) > `}</Text>
+            <Text bold color="magenta">{"› "}</Text>
             {parts.map((part, i) => {
               if (part.type === "paste") {
                 return (
-                  <Text key={i} color="yellow">{`[Pasted text #${part.index} +${part.lines} lines]`}</Text>
+                  <Text key={i} dimColor>{`[pasted +${part.lines} lines]`}</Text>
                 );
               }
               // Last typed part gets the cursor
@@ -600,7 +824,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
               return <Text key={i}>{content}</Text>;
             })}
           </Box>
-          <Text dimColor>  Type / for commands</Text>
+          <Text dimColor>  / for commands</Text>
         </Box>
       )}
       <Text> </Text>
@@ -608,17 +832,184 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
   );
 }
 
+const TOOL_STYLES: Record<string, { icon: string; color: string; label: string }> = {
+  write:      { icon: "✎", color: "green",   label: "write"   },
+  edit:       { icon: "✐", color: "yellow",  label: "edit"    },
+  read:       { icon: "≡", color: "white",   label: "read"    },
+  bash:       { icon: "$", color: "cyan",    label: "run"     },
+  grep:       { icon: "⌕", color: "white",   label: "grep"    },
+  glob:       { icon: "◈", color: "white",   label: "glob"    },
+  run_sql:    { icon: "⬡", color: "blue",    label: "sql"     },
+  url_fetch:  { icon: "◎", color: "cyan",    label: "fetch"   },
+  subagent:   { icon: "⟳", color: "magenta", label: "agent"   },
+  todowrite:  { icon: "☑", color: "cyan",    label: "tasks"   },
+  deploy:     { icon: "⬆", color: "magenta", label: "deploy"  },
+};
+
+const READ_PREVIEW_LINES = 8;
+const WRITE_PREVIEW_LINES = 6;
+const EDIT_PREVIEW_LINES = 8;
+
+function ToolLine({ msg }: { msg: ChatMessage }) {
+  const tool = msg.toolName || "tool";
+  const style = TOOL_STYLES[tool] || { icon: "✓", color: "white", label: tool };
+  const isPassive = ["read", "grep", "glob"].includes(tool);
+  const args = msg.toolArgs;
+
+  // Read tool: show file path + numbered content preview with cyan highlight
+  if (tool === "read" && args?.path) {
+    const content = msg.content || "";
+    const allLines = content.split("\n");
+    const startLine = (args.offset || 0) + 1;
+    const preview = allLines.slice(0, READ_PREVIEW_LINES);
+    const more = allLines.length - READ_PREVIEW_LINES;
+    const gutterWidth = String(startLine + preview.length - 1).length;
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text color="cyan">{style.icon} </Text>
+          <Text color="cyan">{style.label}</Text>
+          <Text dimColor>  {args.path}</Text>
+        </Box>
+        {content && (
+          <Box flexDirection="column" marginLeft={2}>
+            {preview.map((line: string, i: number) => (
+              <Text key={i}>
+                <Text color="gray">{String(startLine + i).padStart(gutterWidth)}  </Text>
+                <Text color="cyan">{line}</Text>
+              </Text>
+            ))}
+            {more > 0 && <Text dimColor>  (+{more} more lines)</Text>}
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
+  // Write tool: show file path + content preview
+  if (tool === "write" && args?.path) {
+    const content = args.content || "";
+    const lines = content.split("\n");
+    const preview = lines.slice(0, WRITE_PREVIEW_LINES);
+    const more = lines.length - WRITE_PREVIEW_LINES;
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text color="green" bold>{style.icon} </Text>
+          <Text color="green" bold>{style.label}</Text>
+          <Text dimColor>  {args.path}</Text>
+        </Box>
+        <Box flexDirection="column" marginLeft={2}>
+          {preview.map((line: string, i: number) => (
+            <Text key={i} color="green">+ {line}</Text>
+          ))}
+          {more > 0 && <Text dimColor>  (+{more} more lines)</Text>}
+        </Box>
+      </Box>
+    );
+  }
+
+  // Edit tool: show old → new diff
+  if (tool === "edit" && args?.old_string != null) {
+    const oldLines = (args.old_string || "").split("\n").slice(0, EDIT_PREVIEW_LINES);
+    const newLines = (args.new_string || "").split("\n").slice(0, EDIT_PREVIEW_LINES);
+    const oldTotal = (args.old_string || "").split("\n").length;
+    const newTotal = (args.new_string || "").split("\n").length;
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text color="yellow" bold>{style.icon} </Text>
+          <Text color="yellow" bold>{style.label}</Text>
+          <Text dimColor>  {args.file_path || args.path || ""}</Text>
+        </Box>
+        <Box flexDirection="column" marginLeft={2}>
+          {oldLines.map((line: string, i: number) => (
+            <Text key={`o${i}`} color="red">- {line}</Text>
+          ))}
+          {oldTotal > EDIT_PREVIEW_LINES && <Text dimColor>  (-{oldTotal - EDIT_PREVIEW_LINES} more)</Text>}
+          {newLines.map((line: string, i: number) => (
+            <Text key={`n${i}`} color="green">+ {line}</Text>
+          ))}
+          {newTotal > EDIT_PREVIEW_LINES && <Text dimColor>  (+{newTotal - EDIT_PREVIEW_LINES} more)</Text>}
+        </Box>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={style.color as any} bold={!isPassive}>{style.icon} </Text>
+        <Text color={style.color as any} bold={!isPassive} dimColor={isPassive}>{style.label}</Text>
+      </Box>
+      {msg.content && (
+        <Text dimColor>  {msg.content}</Text>
+      )}
+    </Box>
+  );
+}
+
+function TodoBlock({ todos }: { todos: TodoItem[] }) {
+  const done = todos.filter((t) => t.status === "completed").length;
+  const allDone = done === todos.length;
+
+  if (allDone) {
+    return (
+      <Box>
+        <Text color="green" bold>✓ </Text>
+        <Text color="green">All done  </Text>
+        <Text dimColor>{done}/{todos.length} tasks completed</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column">
+      {todos.map((t, i) => {
+        if (t.status === "completed") {
+          return (
+            <Box key={i}>
+              <Text color="green">  ✓  </Text>
+              <Text dimColor>{t.content}</Text>
+            </Box>
+          );
+        }
+        if (t.status === "in_progress") {
+          return (
+            <Box key={i}>
+              <Text color="magenta" bold>  ●  </Text>
+              <Text bold>{t.content}</Text>
+            </Box>
+          );
+        }
+        return (
+          <Box key={i}>
+            <Text dimColor>  ○  {t.content}</Text>
+          </Box>
+        );
+      })}
+      <Text dimColor>  ─────────────────────</Text>
+      <Text dimColor>  {done}/{todos.length} done</Text>
+    </Box>
+  );
+}
+
 function MessageLine({ msg }: { msg: ChatMessage }) {
   switch (msg.type) {
     case "user":
-      return <Text><Text bold color="cyan">You: </Text>{msg.content}</Text>;
+      return <Text><Text bold color="magenta">You  </Text>{msg.content}</Text>;
     case "assistant":
+    case "streaming":
       return <Text>{msg.content}</Text>;
     case "tool":
-      return <Text color="green">{msg.content}</Text>;
+      return <ToolLine msg={msg} />;
+    case "todo":
+      return <TodoBlock todos={msg.todos || []} />;
     case "error":
       return <Text color="red">{msg.content}</Text>;
     case "info":
       return <Text dimColor>{msg.content}</Text>;
+    case "success":
+      return <Text color="green">✔ {msg.content}</Text>;
   }
 }

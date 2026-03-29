@@ -1,3 +1,8 @@
+---
+name: google-auth
+description: Google OAuth login via auth proxy, JWT sessions, cookie handling, user table, and protected routes.
+---
+
 # Google Authentication
 
 When the user asks for Google login/auth, use the auth proxy + JWT session flow.

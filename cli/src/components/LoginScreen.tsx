@@ -10,6 +10,7 @@ interface Props {
 
 export function LoginScreen({ backendUrl, appUrl, onLogin }: Props) {
   const [status, setStatus] = useState<"starting" | "polling" | "error">("starting");
+  const [authUrl, setAuthUrl] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -17,21 +18,19 @@ export function LoginScreen({ backendUrl, appUrl, onLogin }: Props) {
 
     async function run() {
       try {
-        // Start device code flow
         const res = await fetch(`${backendUrl}/api/auth/cli/start`, { method: "POST" });
-        if (!res.ok) throw new Error("Failed to start auth flow. Is the backend running?");
+        if (!res.ok) throw new Error("Could not reach Dreamer. Check your connection and try again.");
         const { code } = (await res.json()) as { code: string };
 
-        const authUrl = `${appUrl}/auth/cli?cli_code=${code}`;
+        const url = `${appUrl}/auth/cli?cli_code=${code}`;
+        setAuthUrl(url);
 
-        // Open browser
         const { exec } = await import("child_process");
         const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-        exec(`${openCmd} "${authUrl}"`);
+        exec(`${openCmd} "${url}"`);
 
         setStatus("polling");
 
-        // Poll for approval
         const deadline = Date.now() + 15 * 60 * 1000;
         while (!cancelled && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 2000));
@@ -45,10 +44,10 @@ export function LoginScreen({ backendUrl, appUrl, onLogin }: Props) {
             return;
           }
           if (result.status === "expired") {
-            throw new Error("Auth code expired. Try again.");
+            throw new Error("Session expired. Please restart Dreamer to try again.");
           }
         }
-        if (!cancelled) throw new Error("Login timed out.");
+        if (!cancelled) throw new Error("Session timed out. Please restart Dreamer to try again.");
       } catch (err: any) {
         if (!cancelled) {
           setError(err.message);
@@ -61,22 +60,49 @@ export function LoginScreen({ backendUrl, appUrl, onLogin }: Props) {
     return () => { cancelled = true; };
   }, []);
 
+  // OSC 8 clickable link
+  const link = authUrl
+    ? `\x1b]8;;${authUrl}\x07${authUrl}\x1b]8;;\x07`
+    : "";
+
   if (status === "error") {
     return (
-      <Box flexDirection="column">
-        <Text color="red">✗ {error}</Text>
+      <Box flexDirection="column" paddingLeft={2}>
+        <Box borderStyle="round" borderColor="red" paddingX={2} paddingY={1} flexDirection="column">
+          <Text bold color="red">  Something went wrong</Text>
+          <Text> </Text>
+          <Text color="white">  {error}</Text>
+        </Box>
       </Box>
     );
   }
 
   return (
-    <Box flexDirection="column">
-      {status === "starting" && <Text dimColor>Starting authentication...</Text>}
+    <Box flexDirection="column" paddingLeft={2}>
+      {status === "starting" && (
+        <Box>
+          <Text>  </Text>
+          <Text color="magenta"><Spinner type="dots" /></Text>
+          <Text> Preparing your login...</Text>
+        </Box>
+      )}
       {status === "polling" && (
-        <Text>
-          <Text color="green"><Spinner type="dots" /></Text>
-          {" "}Waiting for login in browser...
-        </Text>
+        <Box borderStyle="round" borderColor="magenta" paddingX={2} paddingY={1} flexDirection="column">
+          <Text bold color="white">  Welcome to Dreamer</Text>
+          <Text> </Text>
+          <Text>  We opened your browser to sign in.</Text>
+          <Text>  Complete the sign-in there, and you'll be</Text>
+          <Text>  connected here automatically.</Text>
+          <Text> </Text>
+          <Box>
+            <Text>  </Text>
+            <Text color="magenta"><Spinner type="dots" /></Text>
+            <Text color="white"> Waiting for you to sign in...</Text>
+          </Box>
+          <Text> </Text>
+          <Text dimColor>  Browser didn't open? Visit this link:</Text>
+          <Text color="cyan">  {link}</Text>
+        </Box>
       )}
     </Box>
   );

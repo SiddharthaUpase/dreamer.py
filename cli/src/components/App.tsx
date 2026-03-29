@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
+import Spinner from "ink-spinner";
 import { ApiClient } from "../apiClient.js";
 import { loadPrefs, savePrefs } from "../prefs.js";
 import { LoginScreen } from "./LoginScreen.js";
@@ -76,15 +77,31 @@ export function App() {
     savePrefs(prefs);
   };
 
+  const logo = [
+    "     _                                   ",
+    "  __| |_ __ ___  __ _ _ __ ___   ___ _ __",
+    " / _` | '__/ _ \\/ _` | '_ ` _ \\ / _ \\ '__|",
+    "| (_| | | |  __/ (_| | | | | | |  __/ |  ",
+    " \\__,_|_|  \\___|\\__,_|_| |_| |_|\\___|_|  ",
+  ];
+
   return (
     <Box flexDirection="column">
-      <Text bold>Dreamer CLI</Text>
-      <Text dimColor>{`Backend: ${BACKEND_URL}`}</Text>
-      <Text dimColor>{`App:     ${APP_URL}`}</Text>
+      <Text> </Text>
+      {logo.map((line, i) => (
+        <Text key={i} color="magenta">{line}</Text>
+      ))}
+      <Text> </Text>
+      <Text dimColor>  Turn your ideas into production apps.</Text>
+      <Text dimColor>  No coding experience needed.</Text>
       <Text> </Text>
 
       {screen === "loading" && (
-        <Text dimColor>Checking auth...</Text>
+        <Box>
+          <Text>  </Text>
+          <Text color="magenta"><Spinner type="dots" /></Text>
+          <Text dimColor> Connecting...</Text>
+        </Box>
       )}
 
       {screen === "login" && (
