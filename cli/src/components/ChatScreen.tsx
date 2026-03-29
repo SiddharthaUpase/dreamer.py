@@ -4,7 +4,7 @@ import SelectInput from "ink-select-input";
 import Spinner from "ink-spinner";
 import { ApiClient } from "../apiClient.js";
 import { formatToolArgs, formatToolOutput, truncate } from "../format.js";
-import { detectFiles, uploadFiles } from "../files.js";
+import { detectFiles, uploadFiles, normalizeDroppedPath } from "../files.js";
 import { enableBracketedPaste, disableBracketedPaste, isPasting } from "../keyboard.js";
 
 const MODELS = ["claude-sonnet", "claude-haiku", "minimax", "kimi", "mimo"];
@@ -55,6 +55,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
   const rows = stdout?.rows ?? 24;
   const cols = stdout?.columns ?? 80;
   const [phase, setPhase] = useState<Phase>("input");
+  const [uploading, setUploading] = useState(false);
   const [parts, setParts] = useState<InputPart[]>([{ type: "typed", content: "" }]);
   const pasteCounter = useRef(0);
   const [scrollOffset, setScrollOffset] = useState(0); // lines from bottom, 0 = auto-scroll
@@ -91,6 +92,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
   const tokenBuffer = useRef("");
   const flushTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastToolArgs = useRef<Record<string, any> | null>(null);
+  const pendingUploads = useRef<string[]>([]);
 
   const startTokenBatching = useCallback(() => {
     tokenBuffer.current = "";
@@ -135,9 +137,41 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     };
   }, []);
 
-  // Bracketed paste: store as a named block, display as summary
+  // Bracketed paste: detect file drops or store as a named block
   useEffect(() => {
     enableBracketedPaste((text) => {
+      // Check if pasted text contains file paths (drag-drop from Finder)
+      // Could be single path or multiple paths (one per line)
+      const pasteLines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+      const droppedFiles = pasteLines.map((l) => normalizeDroppedPath(l)).filter((p): p is string => p !== null);
+      if (droppedFiles.length > 0) {
+        setUploading(true);
+        addMessage("info", `↑ uploading ${droppedFiles.length} file${droppedFiles.length > 1 ? "s" : ""}...`);
+        uploadFiles(api, project.id, droppedFiles).then((results) => {
+          setMessages((prev) => {
+            const updated = [...prev];
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].type === "info" && updated[i].content.startsWith("↑ uploading")) {
+                updated.splice(i, 1);
+                break;
+              }
+            }
+            for (const u of results) {
+              if (u.remotePath) {
+                pendingUploads.current.push(u.remotePath!);
+                updated.push({ type: "success", content: `${u.fileName} (${u.size}) → ${u.remotePath}` });
+              } else if (u.error) {
+                updated.push({ type: "error", content: `Upload failed: ${u.fileName}: ${u.error}` });
+              }
+            }
+            return updated;
+          });
+          setUploading(false);
+        }).catch(() => { setUploading(false); });
+        return;
+      }
+
+      // Normal paste: store as a named block
       pasteCounter.current += 1;
       const index = pasteCounter.current;
       const lines = text.split("\n").length;
@@ -161,6 +195,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     { name: "/deploy",   desc: "deploy to Vercel" },
     { name: "/share",    desc: "share project with another user" },
     { name: "/leave",    desc: "leave a shared project" },
+    { name: "/reset",    desc: "clear screen (keeps history)" },
     { name: "/delete",   desc: "delete this project" },
     { name: "/help",     desc: "show all commands" },
     { name: "/logout",   desc: "log out" },
@@ -285,6 +320,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
 
     // Enter = submit (or backslash-Enter = newline)
     if (key.return) {
+      if (uploading) return; // Block submit while files are uploading
       setParts((prev) => {
         const last = prev[prev.length - 1];
         // Backslash-Enter: strip \ and add newline, keep editing
@@ -355,14 +391,22 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
   async function handleSubmit(text: string) {
     if (!text.trim()) return;
 
-    // Handle commands
-    if (text.startsWith("/")) {
+    // Handle commands — only if first word matches a known command (not file paths)
+    const firstWord = text.trim().split(" ")[0];
+    if (firstWord.startsWith("/") && KNOWN_COMMANDS.has(firstWord)) {
       await handleCommand(text.trim());
       return;
     }
 
-    // Detect and upload files
+    // Attach any pending file uploads (from drag-drop)
     let processedText = text;
+    if (pendingUploads.current.length > 0) {
+      const uploads = pendingUploads.current.map((p) => `[uploaded file: ${p}]`).join("\n");
+      processedText = uploads + "\n" + processedText;
+      pendingUploads.current = [];
+    }
+
+    // Detect and upload files from typed paths
     const filePaths = detectFiles(text);
     if (filePaths.length > 0) {
       const uploads = await uploadFiles(api, project.id, filePaths);
@@ -497,6 +541,11 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
       case "/clear":
         await api.request(`/api/projects/${project.id}/history`, { method: "DELETE" });
         setMessages([{ type: "info", content: "History cleared." }]);
+        setScrollOffset(0);
+        break;
+
+      case "/reset":
+        setMessages([{ type: "info", content: "─── screen cleared · history preserved ───" }]);
         setScrollOffset(0);
         break;
 
@@ -637,6 +686,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
           "Available commands:",
           "  /clear      — clear conversation history",
           "  /compact    — summarise history to save context",
+          "  /reset      — clear screen (keeps history)",
           "  /history    — show message count",
           "  /url        — show preview URL",
           "  /model      — switch AI model",
@@ -769,6 +819,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
           <Text bold>Select a model:</Text>
           <SelectInput
             items={modelItems}
+            initialIndex={MODELS.indexOf(model) >= 0 ? MODELS.indexOf(model) : 0}
             onSelect={(item) => {
               onModelChange(item.value);
               addMessage("info", `Model: ${item.value}`);
@@ -824,13 +875,26 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
               return <Text key={i}>{content}</Text>;
             })}
           </Box>
-          <Text dimColor>  / for commands</Text>
+          {uploading ? (
+            <Box>
+              <Text color="cyan"><Spinner type="dots" /></Text>
+              <Text color="cyan">  Uploading files...</Text>
+            </Box>
+          ) : (
+            <Text dimColor>  / for commands</Text>
+          )}
         </Box>
       )}
       <Text> </Text>
     </Box>
   );
 }
+
+const KNOWN_COMMANDS = new Set([
+  "/clear", "/compact", "/reset", "/history", "/url", "/model", "/projects",
+  "/deploy", "/share", "/leave", "/delete", "/help", "/logout",
+  "/exit", "/quit", "/switch", "/new",
+]);
 
 const TOOL_STYLES: Record<string, { icon: string; color: string; label: string }> = {
   write:      { icon: "✎", color: "green",   label: "write"   },

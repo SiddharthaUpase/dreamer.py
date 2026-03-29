@@ -243,6 +243,50 @@ For tables with user data, add a `user_id uuid REFERENCES users(id)` column and 
 
 ## Critical rules
 
+> ⚠️ **COOKIES ARE ASYNC** — This is the #1 source of bugs. Read this carefully.
+
+In Next.js App Router, `cookies()` from `next/headers` is **async** and returns a **Promise**. You MUST `await` it:
+
+```ts
+// ✅ CORRECT — always do this
+const cookieStore = await cookies();
+const token = cookieStore.get('session')?.value;
+
+// ❌ WRONG — cookies().sync() does NOT exist, will crash every route
+const cookieStore = cookies().sync();
+
+// ❌ WRONG — missing await, cookieStore is a Promise not a cookie jar
+const cookieStore = cookies();
+const token = cookieStore.get('session')?.value; // undefined
+```
+
+Every API route and server function that reads or sets cookies MUST be `async` and MUST `await cookies()`. If you forget, auth silently breaks and pages show "Loading..." forever.
+
+### Helper pattern for protected routes
+
+Copy this exact pattern into a shared `lib/auth.ts` file:
+
+```ts
+import jwt from 'jsonwebtoken';
+import { cookies } from 'next/headers';
+
+export async function getUserId(): Promise<string | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get('session')?.value;
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string };
+    return decoded.userId;
+  } catch {
+    return null;
+  }
+}
+```
+
+Then in any API route: `const userId = await getUserId();`
+
+### Other rules
+
 - **ALWAYS** use tagged template syntax for neon queries: `` sql`SELECT * FROM users WHERE id = ${id}` `` — NEVER use `sql('SELECT...', [params])`.
 - **ALWAYS** use `window.location.href` for auth redirects, NOT `useRouter().push()`. Full page reloads are needed to pick up cookie changes.
 - **NEVER** use `supabase.auth`, Google Identity Services script, or `signInWithOAuth`.
