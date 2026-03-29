@@ -187,17 +187,19 @@ export async function injectProjectEnv(sb: SandboxInstance, envData: ProjectEnvD
   await sb.fs.write("/app/.env.local", final);
 }
 
-const SKILLS_DIR = pathNode.join(pathNode.dirname(new URL(import.meta.url).pathname), "..", "agent", "prompts");
-const SKILL_FILES = ["database.md", "google-auth.md", "storage.md"];
+const SKILLS_DIR = pathNode.join(pathNode.dirname(new URL(import.meta.url).pathname), "..", "agent", "prompts", "skills");
 
 export async function injectSkills(sb: SandboxInstance): Promise<void> {
   try { await sb.fs.mkdir("/skills"); } catch { /* exists */ }
-  for (const file of SKILL_FILES) {
-    try {
-      const content = fsNode.readFileSync(pathNode.join(SKILLS_DIR, file), "utf8");
-      await sb.fs.write(`/skills/${file}`, content);
-    } catch { /* skip */ }
-  }
+  try {
+    const files = fsNode.readdirSync(SKILLS_DIR).filter((f: string) => f.endsWith(".md"));
+    for (const file of files) {
+      try {
+        const content = fsNode.readFileSync(pathNode.join(SKILLS_DIR, file), "utf8");
+        await sb.fs.write(`/skills/${file}`, content);
+      } catch { /* skip */ }
+    }
+  } catch { /* skills dir not found */ }
 }
 
 export async function readSandboxEnvVars(sb: SandboxInstance): Promise<Record<string, string>> {

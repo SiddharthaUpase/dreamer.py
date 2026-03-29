@@ -27,3 +27,22 @@ export async function verifyUser(token: string) {
   if (error || !data.user) return null;
   return data.user;
 }
+
+// Look up an existing user by email using the Supabase admin REST API
+export async function getUserByEmail(email: string): Promise<{ id: string; email: string } | null> {
+  const res = await fetch(
+    `${process.env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      },
+    }
+  );
+  if (!res.ok) return null;
+  const data = (await res.json()) as { users?: any[] };
+  const user = (data.users || []).find(
+    (u: any) => u.email?.toLowerCase() === email.toLowerCase()
+  );
+  return user ? { id: user.id, email: user.email } : null;
+}

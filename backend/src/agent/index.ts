@@ -90,7 +90,52 @@ const VISION_MODELS = new Set(["claude-sonnet", "claude-haiku"]);
 
 // ===== Modular system prompt =====
 const PROMPTS_DIR = pathNode.join(pathNode.dirname(new URL(import.meta.url).pathname), "prompts");
-const PROMPT_FILES = ["core", "workflow", "tools", "sandbox", "skills", "response"];
+const SKILLS_DIR = pathNode.join(PROMPTS_DIR, "skills");
+const PROMPT_FILES = ["core", "workflow", "tools", "sandbox", "response"];
+
+interface SkillMeta { name: string; description: string; file: string; }
+
+function parseSkillFrontmatter(content: string): { name: string; description: string } | null {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return null;
+  const yaml = match[1];
+  const name = yaml.match(/^name:\s*(.+)$/m)?.[1]?.trim();
+  const desc = yaml.match(/^description:\s*(.+)$/m)?.[1]?.trim();
+  if (!name || !desc) return null;
+  return { name, description: desc };
+}
+
+function loadSkills(): SkillMeta[] {
+  const skills: SkillMeta[] = [];
+  try {
+    const files = fsNode.readdirSync(SKILLS_DIR).filter(f => f.endsWith(".md"));
+    for (const file of files) {
+      const content = fsNode.readFileSync(pathNode.join(SKILLS_DIR, file), "utf8");
+      const meta = parseSkillFrontmatter(content);
+      if (meta) skills.push({ ...meta, file });
+    }
+  } catch { /* skills dir not found */ }
+  return skills;
+}
+
+const SKILLS = loadSkills();
+
+function buildSkillsPrompt(): string {
+  if (SKILLS.length === 0) return "";
+  const lines = [
+    "# Skills — Reference Guides",
+    "",
+    "Skills are detailed implementation guides stored in the sandbox at `/skills/`. When a task matches a skill, **read the skill file first** before implementing. These contain tested patterns, correct API usage, and common pitfalls.",
+    "",
+    "**IMPORTANT:** Do NOT guess at implementation details for topics covered by a skill. Always read the skill file.",
+    "",
+    "Available skills:",
+  ];
+  for (const s of SKILLS) {
+    lines.push(`- \`/skills/${s.file}\` — **${s.name}**: ${s.description}`);
+  }
+  return lines.join("\n");
+}
 
 function loadSystemPrompt(): string {
   const parts: string[] = [];
@@ -100,6 +145,9 @@ function loadSystemPrompt(): string {
       if (content) parts.push(content);
     } catch { /* prompt file not found, skip */ }
   }
+  // Insert auto-generated skills index
+  const skillsPrompt = buildSkillsPrompt();
+  if (skillsPrompt) parts.push(skillsPrompt);
   return parts.join("\n\n");
 }
 
@@ -259,7 +307,7 @@ export function dbRowToLangChain(row: StoredMessage): BaseMessage {
   return new AIMessage(row.content);
 }
 
-export function langChainToDbRow(msg: BaseMessage, projectId: string): Omit<StoredMessage, "id" | "created_at"> {
+export function langChainToDbRow(msg: BaseMessage, projectId: string, userId?: string): Omit<StoredMessage, "id" | "created_at"> {
   const content = typeof msg.content === "string"
     ? msg.content
     : Array.isArray(msg.content)
@@ -267,7 +315,7 @@ export function langChainToDbRow(msg: BaseMessage, projectId: string): Omit<Stor
       : JSON.stringify(msg.content);
 
   if (msg instanceof HumanMessage) {
-    return { project_id: projectId, role: "human", content, tool_calls: null, tool_call_id: null, name: null };
+    return { project_id: projectId, role: "human", content, tool_calls: null, tool_call_id: null, name: null, user_id: userId || null };
   }
 
   if (msg instanceof ToolMessage) {
@@ -278,6 +326,7 @@ export function langChainToDbRow(msg: BaseMessage, projectId: string): Omit<Stor
       tool_calls: null,
       tool_call_id: msg.tool_call_id || null,
       name: msg.name || null,
+      user_id: userId || null,
     };
   }
 
@@ -286,7 +335,7 @@ export function langChainToDbRow(msg: BaseMessage, projectId: string): Omit<Stor
   if (aiMsg.tool_calls?.length) {
     toolCalls = aiMsg.tool_calls.map((tc) => ({ name: tc.name, args: tc.args, id: tc.id }));
   }
-  return { project_id: projectId, role: "ai", content, tool_calls: toolCalls, tool_call_id: null, name: null };
+  return { project_id: projectId, role: "ai", content, tool_calls: toolCalls, tool_call_id: null, name: null, user_id: userId || null };
 }
 
 export function sanitizeHistory(messages: BaseMessage[]): BaseMessage[] {
