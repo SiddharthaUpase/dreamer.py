@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'cli/**'
+      - '.github/workflows/publish-cli.yml'
+  workflow_dispatch:
 
 jobs:
   publish:
