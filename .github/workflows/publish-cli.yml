@@ -19,7 +19,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: cli
-        run: npm ci
+        run: npm install
 
       - name: Bump patch version
         working-directory: cli
