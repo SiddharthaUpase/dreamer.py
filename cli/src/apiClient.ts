@@ -33,21 +33,29 @@ export interface DeployEvent {
 export class ApiClient {
   private baseUrl: string;
   private apiKey: string;
+  private openRouterKey: string;
 
-  constructor(baseUrlOrOpts: string | ApiClientOptions, apiKey?: string) {
+  constructor(baseUrlOrOpts: string | ApiClientOptions, apiKey?: string, openRouterKey?: string) {
     if (typeof baseUrlOrOpts === "string") {
       this.baseUrl = baseUrlOrOpts;
       this.apiKey = apiKey!;
+      this.openRouterKey = openRouterKey || "";
     } else {
       this.baseUrl = baseUrlOrOpts.baseUrl;
       this.apiKey = baseUrlOrOpts.apiKey;
+      this.openRouterKey = openRouterKey || "";
     }
+  }
+
+  setOpenRouterKey(key: string) {
+    this.openRouterKey = key;
   }
 
   private headers(extra?: Record<string, string>): Record<string, string> {
     return {
       Authorization: `Bearer ${this.apiKey}`,
       "Content-Type": "application/json",
+      ...(this.openRouterKey ? { "X-OpenRouter-Key": this.openRouterKey } : {}),
       ...extra,
     };
   }

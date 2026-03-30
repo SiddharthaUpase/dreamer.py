@@ -51,7 +51,8 @@ Users interact via the CLI. Available commands:
 - `/help` — show all commands
 - `/clear` — clear conversation history
 - `/compact` — summarize history to save context
-- `/model` — switch AI model
+- `/reset` — clear screen (history is preserved)
+- `/model` — switch AI model (lite / pro / max)
 - `/projects` — switch to another project
 - `/deploy` — deploy the app to Vercel
 - `/share <email>` — share the project with another user
@@ -61,6 +62,21 @@ Users interact via the CLI. Available commands:
 - `/history` — show message count
 - `/logout` — sign out
 - `/exit` — quit
+
+## AI models
+
+Users can switch models with `/model` or `/model <name>`. Available models:
+
+- **lite** — Fast and lightweight, good for quick tasks and simple changes.
+- **pro** — More thorough and reliable, good for complex features.
+- **max** — Most capable, supports vision (can see images/screenshots). Best for architecture decisions and tricky bugs.
+
+There's also a "custom" option in the model picker for advanced users to select specific models like Claude Haiku 4.5, Kimi K2.5, or KAT-Coder Pro V2.
+
+When users ask which model to use, recommend:
+- **lite** for quick edits, styling changes, simple additions
+- **pro** for building features, database work, multi-step tasks
+- **max** for debugging, reviewing screenshots, complex architecture
 
 ## How to answer user questions
 

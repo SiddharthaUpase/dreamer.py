@@ -7,7 +7,29 @@ import { formatToolArgs, formatToolOutput, truncate } from "../format.js";
 import { detectFiles, uploadFiles, normalizeDroppedPath } from "../files.js";
 import { enableBracketedPaste, disableBracketedPaste, isPasting } from "../keyboard.js";
 
-const MODELS = ["claude-sonnet", "claude-haiku", "minimax", "kimi", "mimo"];
+const MODEL_PRESETS = [
+  { id: "minimax",        name: "lite",   desc: "fast and lightweight" },
+  { id: "mimo",           name: "pro",    desc: "thorough and reliable" },
+  { id: "claude-sonnet",  name: "max",    desc: "expert with vision" },
+] as const;
+
+// For custom model selection (pro users)
+const CUSTOM_MODELS = [
+  { id: "claude-sonnet",  label: "Claude Sonnet 4.6        vision, expert reasoning" },
+  { id: "claude-haiku",   label: "Claude Haiku 4.5         fast, vision support" },
+  { id: "minimax",        label: "MiniMax M2.7             lightweight, fast tasks" },
+  { id: "kimi",           label: "Kimi K2.5                long context, reasoning" },
+  { id: "mimo",           label: "MiMo V2 Pro              thorough, code-focused" },
+  { id: "kat-coder",      label: "KAT-Coder Pro V2         enterprise coding, SaaS" },
+];
+
+function getModelDisplayName(modelId: string): string {
+  const preset = MODEL_PRESETS.find((p) => p.id === modelId);
+  if (preset) return preset.name;
+  const custom = CUSTOM_MODELS.find((c) => c.id === modelId);
+  if (custom) return custom.label.split(/\s{2,}/)[0].trim();
+  return modelId;
+}
 
 interface ProjectInfo {
   id: string;
@@ -37,9 +59,10 @@ interface Props {
   onModelChange: (model: string) => void;
   onSwitchProject: () => void;
   onLogout: () => void;
+  onUpdateKey: () => void;
 }
 
-type Phase = "input" | "streaming" | "model-select" | "confirm-delete";
+type Phase = "input" | "streaming" | "model-select" | "model-custom" | "confirm-delete";
 
 type InputPart =
   | { type: "typed"; content: string }
@@ -49,7 +72,7 @@ function partsToText(parts: InputPart[]): string {
   return parts.map((p) => p.content).join("");
 }
 
-export function ChatScreen({ api, project, model, onModelChange, onSwitchProject, onLogout }: Props) {
+export function ChatScreen({ api, project, model, onModelChange, onSwitchProject, onLogout, onUpdateKey }: Props) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
@@ -197,6 +220,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     { name: "/leave",    desc: "leave a shared project" },
     { name: "/reset",    desc: "clear screen (keeps history)" },
     { name: "/delete",   desc: "delete this project" },
+    { name: "/key",      desc: "update OpenRouter API key" },
     { name: "/help",     desc: "show all commands" },
     { name: "/logout",   desc: "log out" },
     { name: "/exit",     desc: "quit" },
@@ -216,6 +240,12 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
 
   // Handle keyboard input
   useInput((ch, key) => {
+    // ESC to go back from any selection phase
+    if (key.escape && (phase === "model-select" || phase === "model-custom" || phase === "confirm-delete")) {
+      setPhase(phase === "model-custom" ? "model-select" : "input");
+      return;
+    }
+
     // ESC to abort streaming
     if (key.escape && abortController) {
       abortController.abort();
@@ -572,14 +602,16 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
         addMessage("info", project.previewUrl ? `Preview: ${project.previewUrl}` : "No preview URL available.");
         break;
 
-      case "/model":
-        if (args[0] && MODELS.includes(args[0])) {
-          onModelChange(args[0]);
-          addMessage("info", `Model: ${args[0]}`);
+      case "/model": {
+        const match = args[0] && (MODEL_PRESETS.find((p) => p.name === args[0] || p.id === args[0]));
+        if (match) {
+          onModelChange(match.id);
+          addMessage("info", `Model: ${match.name}`);
         } else {
           setPhase("model-select");
         }
         break;
+      }
 
       case "/projects":
         onSwitchProject();
@@ -676,6 +708,10 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
         break;
       }
 
+      case "/key":
+        onUpdateKey();
+        break;
+
       case "/delete":
         addMessage("error", `Delete project "${project.name}"? This cannot be undone. (y/N)`);
         setPhase("confirm-delete");
@@ -689,14 +725,21 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
           "  /reset      — clear screen (keeps history)",
           "  /history    — show message count",
           "  /url        — show preview URL",
-          "  /model      — switch AI model",
+          "  /model      — switch AI model (lite / pro / max)",
           "  /projects   — switch project",
           "  /deploy     — deploy to Vercel",
           "  /share      — share project with another user",
           "  /leave      — leave a shared project",
           "  /delete     — delete this project",
+          "  /key        — update OpenRouter API key",
           "  /logout     — log out",
           "  /exit       — quit",
+          "",
+          "Models:",
+          "  lite  — fast and lightweight",
+          "  pro   — thorough and reliable",
+          "  max   — expert with vision",
+          "  Tip: /model lite or /model pro to switch quickly",
         ].join("\n"));
         break;
 
@@ -715,10 +758,13 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
     }
   }
 
-  const modelItems = MODELS.map((m) => ({
-    label: `${m === model ? "● " : "  "}${m}`,
-    value: m,
-  }));
+  const modelItems = [
+    ...MODEL_PRESETS.map((p) => ({
+      label: `${p.id === model ? "● " : "  "}${p.name}  ${p.desc}`,
+      value: p.id,
+    })),
+    { label: `${!MODEL_PRESETS.some((p) => p.id === model) ? "● " : "  "}custom  pick a specific model`, value: "__custom__" },
+  ];
 
   // How many display lines each message occupies (approximate, accounts for wrapping)
   function msgLines(msg: ChatMessage): number {
@@ -780,11 +826,11 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
       {/* Header */}
       <Box flexDirection="column">
         <Box>
-          <Text bold color="magenta">{project.name}</Text>
-          <Text dimColor>  {model}</Text>
+          <Text bold color="yellow">{project.name}</Text>
+          <Text dimColor>  {getModelDisplayName(model)}</Text>
         </Box>
         {previewLink && (
-          <Text dimColor>{previewLink}</Text>
+          <Text color="cyan">{previewLink}</Text>
         )}
       </Box>
 
@@ -802,12 +848,12 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
       {phase === "streaming" && toolStatus && (
         toolStatus === "Thinking" ? (
           <Box>
-            <Text color="magenta"><Spinner type="dots" /></Text>
-            <Text color="magenta" bold>  Dreamer is thinking...</Text>
+            <Text color="yellow"><Spinner type="dots" /></Text>
+            <Text color="yellow" bold>  Dreamer is thinking...</Text>
           </Box>
         ) : (
           <Box>
-            <Text color="magenta"><Spinner type="dots" /></Text>
+            <Text color="yellow"><Spinner type="dots" /></Text>
             <Text color="white">{"  "}{toolStatus}</Text>
           </Box>
         )
@@ -819,19 +865,46 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
           <Text bold>Select a model:</Text>
           <SelectInput
             items={modelItems}
-            initialIndex={MODELS.indexOf(model) >= 0 ? MODELS.indexOf(model) : 0}
+            itemComponent={SelectItem}
+            initialIndex={Math.max(0, MODEL_PRESETS.findIndex((p) => p.id === model))}
             onSelect={(item) => {
+              if (item.value === "__custom__") {
+                setPhase("model-custom");
+                return;
+              }
+              const preset = MODEL_PRESETS.find((p) => p.id === item.value);
               onModelChange(item.value);
-              addMessage("info", `Model: ${item.value}`);
+              addMessage("info", `Model: ${preset ? preset.name : item.value}`);
               setPhase("input");
             }}
           />
+          <Text dimColor>  ESC to cancel</Text>
+        </Box>
+      )}
+
+      {phase === "model-custom" && (
+        <Box flexDirection="column">
+          <Text bold>Select a model:</Text>
+          <SelectInput
+            items={CUSTOM_MODELS.map((m) => ({
+              label: `${m.id === model ? "● " : "  "}${m.label}`,
+              value: m.id,
+            }))}
+            itemComponent={SelectItem}
+            initialIndex={Math.max(0, CUSTOM_MODELS.findIndex((m) => m.id === model))}
+            onSelect={(item) => {
+              onModelChange(item.value);
+              addMessage("info", `Model: ${getModelDisplayName(item.value)}`);
+              setPhase("input");
+            }}
+          />
+          <Text dimColor>  ESC to go back</Text>
         </Box>
       )}
 
       {/* Delete confirmation */}
       {phase === "confirm-delete" && (
-        <Text dimColor>  Press <Text color="red" bold>y</Text> to confirm, any other key to cancel</Text>
+        <Text dimColor>  Press <Text color="red" bold>y</Text> to confirm, <Text>ESC</Text> to cancel</Text>
       )}
 
       {/* Input */}
@@ -843,7 +916,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
                 <Box key={s.name}>
                   <Text
                     bold={i === clampedSuggestionIndex}
-                    color={i === clampedSuggestionIndex ? "magenta" : "white"}
+                    color={i === clampedSuggestionIndex ? "yellow" : "white"}
                   >
                     {i === clampedSuggestionIndex ? "▸ " : "  "}
                     {s.name}
@@ -854,7 +927,7 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
             </Box>
           )}
           <Box flexDirection="row" flexWrap="wrap">
-            <Text bold color="magenta">{"› "}</Text>
+            <Text bold color="yellow">{"› "}</Text>
             {parts.map((part, i) => {
               if (part.type === "paste") {
                 return (
@@ -890,9 +963,13 @@ export function ChatScreen({ api, project, model, onModelChange, onSwitchProject
   );
 }
 
+function SelectItem({ isSelected, label }: { isSelected?: boolean; label: string }) {
+  return <Text color={isSelected ? "yellow" : undefined}>{label}</Text>;
+}
+
 const KNOWN_COMMANDS = new Set([
   "/clear", "/compact", "/reset", "/history", "/url", "/model", "/projects",
-  "/deploy", "/share", "/leave", "/delete", "/help", "/logout",
+  "/deploy", "/share", "/leave", "/delete", "/key", "/help", "/logout",
   "/exit", "/quit", "/switch", "/new",
 ]);
 
@@ -1041,7 +1118,7 @@ function TodoBlock({ todos }: { todos: TodoItem[] }) {
         if (t.status === "in_progress") {
           return (
             <Box key={i}>
-              <Text color="magenta" bold>  ●  </Text>
+              <Text color="yellow" bold>  ●  </Text>
               <Text bold>{t.content}</Text>
             </Box>
           );
@@ -1061,7 +1138,7 @@ function TodoBlock({ todos }: { todos: TodoItem[] }) {
 function MessageLine({ msg }: { msg: ChatMessage }) {
   switch (msg.type) {
     case "user":
-      return <Text><Text bold color="magenta">You  </Text>{msg.content}</Text>;
+      return <Text><Text bold color="yellow">You  </Text>{msg.content}</Text>;
     case "assistant":
     case "streaming":
       return <Text>{msg.content}</Text>;

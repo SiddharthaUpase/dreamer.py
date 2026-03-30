@@ -551,6 +551,8 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
         }
       : undefined;
 
+    const openRouterKey = req.headers["x-openrouter-key"] as string | undefined;
+
     const result = await runAgentStream(
       sandbox, history, message, model || "claude-sonnet",
       sendEvent,
@@ -558,6 +560,7 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
       project.preview_url || undefined,
       dbConfig,
       deployConfig,
+      openRouterKey,
     );
 
     console.log(`\x1b[32m[chat]\x1b[0m agent done, ${result.newMessages.length} new messages, ${result.contextTokens} tokens`);

@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import SelectInput from "ink-select-input";
+
+function SelectItem({ isSelected, label }: { isSelected?: boolean; label: string }) {
+  return <Text color={isSelected ? "yellow" : undefined}>{label}</Text>;
+}
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import { ApiClient } from "../apiClient.js";
@@ -118,7 +122,7 @@ export function ProjectScreen({ api, onSelect }: Props) {
   if (phase === "loading") {
     return (
       <Box paddingLeft={2}>
-        <Text color="magenta"><Spinner type="dots" /></Text>
+        <Text color="yellow"><Spinner type="dots" /></Text>
         <Text> Loading your projects...</Text>
       </Box>
     );
@@ -128,7 +132,7 @@ export function ProjectScreen({ api, onSelect }: Props) {
     return (
       <Box flexDirection="column" paddingLeft={2}>
         <Box>
-          <Text color="magenta"><Spinner type="dots" /></Text>
+          <Text color="yellow"><Spinner type="dots" /></Text>
           <Text> Starting up </Text>
           <Text bold color="white">{connectingName}</Text>
           <Text>...</Text>
@@ -154,7 +158,7 @@ export function ProjectScreen({ api, onSelect }: Props) {
           </Box>
         )}
         <Box>
-          <Text color="magenta">  {">"} </Text>
+          <Text color="yellow">  {">"} </Text>
           <TextInput
             value={newName}
             onChange={setNewName}
@@ -191,6 +195,7 @@ export function ProjectScreen({ api, onSelect }: Props) {
       <Text> </Text>
       <SelectInput
         items={items}
+        itemComponent={SelectItem}
         initialIndex={Math.max(0, projects.findIndex((p) => p.name === lastProject))}
         onSelect={(item) => {
           if (item.value === "__new__") {

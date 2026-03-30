@@ -82,12 +82,12 @@ export function LoginScreen({ backendUrl, appUrl, onLogin }: Props) {
       {status === "starting" && (
         <Box>
           <Text>  </Text>
-          <Text color="magenta"><Spinner type="dots" /></Text>
+          <Text color="yellow"><Spinner type="dots" /></Text>
           <Text> Preparing your login...</Text>
         </Box>
       )}
       {status === "polling" && (
-        <Box borderStyle="round" borderColor="magenta" paddingX={2} paddingY={1} flexDirection="column">
+        <Box borderStyle="round" borderColor="yellow" paddingX={2} paddingY={1} flexDirection="column">
           <Text bold color="white">  Welcome to Dreamer</Text>
           <Text> </Text>
           <Text>  We opened your browser to sign in.</Text>
@@ -96,7 +96,7 @@ export function LoginScreen({ backendUrl, appUrl, onLogin }: Props) {
           <Text> </Text>
           <Box>
             <Text>  </Text>
-            <Text color="magenta"><Spinner type="dots" /></Text>
+            <Text color="yellow"><Spinner type="dots" /></Text>
             <Text color="white"> Waiting for you to sign in...</Text>
           </Box>
           <Text> </Text>

@@ -39,49 +39,47 @@ const openRouterBase = {
   },
 };
 
-const openRouterConfig = {
-  model: "",
-  temperature: 0.8,
-  streaming: true,
-  apiKey: process.env.OPEN_ROUTER,
-  configuration: openRouterBase,
-};
+function makeOpenRouterConfig(apiKey: string) {
+  return {
+    model: "",
+    temperature: 0.8,
+    streaming: true,
+    apiKey,
+    configuration: openRouterBase,
+  };
+}
 
-const anthropicConfig = {
-  ...openRouterConfig,
-  configuration: {
-    ...openRouterBase,
-    fetch: createCachingFetch(),
-  },
-};
+function makeAnthropicConfig(apiKey: string) {
+  return {
+    ...makeOpenRouterConfig(apiKey),
+    configuration: {
+      ...openRouterBase,
+      fetch: createCachingFetch(),
+    },
+  };
+}
 
-export const AVAILABLE_MODELS: Record<string, () => BaseChatModel> = {
-  "claude-sonnet": () =>
-    new ChatOpenAI({
-      ...anthropicConfig,
-      model: "anthropic/claude-sonnet-4.6",
-    }),
-  "claude-haiku": () =>
-    new ChatOpenAI({
-      ...anthropicConfig,
-      model: "anthropic/claude-haiku-4.5",
-    }),
-  "minimax": () =>
-    new ChatOpenAI({
-      ...openRouterConfig,
-      model: "minimax/minimax-m2.7",
-    }),
-  "kimi": () =>
-    new ChatOpenAI({
-      ...openRouterConfig,
-      model: "moonshotai/kimi-k2.5",
-    }),
-  "mimo": () =>
-    new ChatOpenAI({
-      ...openRouterConfig,
-      model: "xiaomi/mimo-v2-pro",
-    }),
-};
+// Legacy configs using env var (for non-chat endpoints like compaction)
+const openRouterConfig = makeOpenRouterConfig(process.env.OPEN_ROUTER || "");
+const anthropicConfig = makeAnthropicConfig(process.env.OPEN_ROUTER || "");
+
+export type ModelFactory = Record<string, () => BaseChatModel>;
+
+export function buildModelFactory(apiKey: string): ModelFactory {
+  const orConfig = makeOpenRouterConfig(apiKey);
+  const anConfig = makeAnthropicConfig(apiKey);
+  return {
+    "claude-sonnet": () => new ChatOpenAI({ ...anConfig, model: "anthropic/claude-sonnet-4.6" }),
+    "claude-haiku": () => new ChatOpenAI({ ...anConfig, model: "anthropic/claude-haiku-4.5" }),
+    "minimax": () => new ChatOpenAI({ ...orConfig, model: "minimax/minimax-m2.7" }),
+    "kimi": () => new ChatOpenAI({ ...orConfig, model: "moonshotai/kimi-k2.5" }),
+    "mimo": () => new ChatOpenAI({ ...orConfig, model: "xiaomi/mimo-v2-pro" }),
+    "kat-coder": () => new ChatOpenAI({ ...orConfig, model: "kwaipilot/kat-coder-pro-v2" }),
+  };
+}
+
+// Default factory using env var
+export const AVAILABLE_MODELS = buildModelFactory(process.env.OPEN_ROUTER || "");
 
 export const MODEL_LIST = Object.keys(AVAILABLE_MODELS);
 
@@ -781,12 +779,14 @@ export async function runAgentStream(
   previewUrl?: string,
   dbConfig?: DatabaseConfig,
   deployConfig?: DeployConfig,
+  openRouterKey?: string,
 ): Promise<AgentResult> {
-  const createModel = AVAILABLE_MODELS[modelId] || AVAILABLE_MODELS["claude-sonnet"];
+  const models = openRouterKey ? buildModelFactory(openRouterKey) : AVAILABLE_MODELS;
+  const createModel = models[modelId] || models["claude-sonnet"];
   const model = createModel();
   const subagentConfig: SubagentConfig = {
     parentModelId: modelId,
-    modelFactory: AVAILABLE_MODELS,
+    modelFactory: models,
     previewUrl,
     onLog: (label, toolName, detail) => {
       onEvent({ type: "subagent_log", label, tool: toolName, detail });
