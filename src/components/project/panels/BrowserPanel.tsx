@@ -42,7 +42,7 @@ export default function BrowserPanel({ previewUrl, iframeKey, setIframeKey }: Pr
             borderRadius: 0.75, display: "flex", alignItems: "center", px: 1,
           }}
         >
-          <Typography variant="caption" sx={{ color: "#888", fontSize: "0.6rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <Typography variant="caption" sx={{ color: "#888", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {previewUrl || "localhost:3000"}
           </Typography>
         </Box>
@@ -75,7 +75,7 @@ export default function BrowserPanel({ previewUrl, iframeKey, setIframeKey }: Pr
           />
         ) : (
           <Box sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Typography variant="caption" sx={{ color: "#B0B0B8", fontSize: "0.7rem" }}>
+            <Typography variant="caption" sx={{ color: "#B0B0B8", fontSize: "0.88rem" }}>
               Waiting for dev server...
             </Typography>
           </Box>

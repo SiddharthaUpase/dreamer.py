@@ -189,7 +189,7 @@ function PanelLeaf({
         <Box sx={{ color: "text.secondary", display: "flex", alignItems: "center" }}>
           {PANEL_ICONS[node.panelType]}
         </Box>
-        <Typography variant="caption" sx={{ fontSize: "0.7rem", fontWeight: 600, color: "text.secondary", flex: 1 }}>
+        <Typography variant="caption" sx={{ fontSize: "0.88rem", fontWeight: 600, color: "text.secondary", flex: 1 }}>
           {PANEL_LABELS[node.panelType]}
         </Typography>
         {canClose && (

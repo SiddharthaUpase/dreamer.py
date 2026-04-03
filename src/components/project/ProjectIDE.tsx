@@ -148,7 +148,7 @@ export default function ProjectIDE({ projectId }: Props) {
           </IconButton>
         </Tooltip>
 
-        <Typography variant="body2" fontWeight={600} sx={{ color: "text.primary", flex: 1, fontSize: "0.85rem" }}>
+        <Typography variant="body2" fontWeight={600} sx={{ color: "text.primary", flex: 1, fontSize: "1rem" }}>
           {projectName ?? "Loading..."}
         </Typography>
 

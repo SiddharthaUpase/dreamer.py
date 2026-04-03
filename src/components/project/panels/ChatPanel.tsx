@@ -159,7 +159,7 @@ export default function ChatPanel({
           }}
           sx={{
             "& .MuiOutlinedInput-root": {
-              borderRadius: 2, bgcolor: "#F8F8FA", fontSize: "0.82rem",
+              borderRadius: 2, bgcolor: "#F8F8FA", fontSize: "0.95rem",
             },
           }}
         />
@@ -180,7 +180,7 @@ export default function ChatPanel({
                   }}
                 />
               </Box>
-              <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.6rem" }}>
+              <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.78rem" }}>
                 {Math.round(contextInfo.tokens / 1000)}k
               </Typography>
             </>
@@ -201,10 +201,10 @@ export default function ChatPanel({
           value={selectedModel}
           onChange={(e) => setSelectedModel(e.target.value)}
           disabled={loading}
-          sx={{ fontSize: "0.65rem", height: 22, "& .MuiSelect-select": { py: 0, px: 0.75 } }}
+          sx={{ fontSize: "0.95rem", height: 22, "& .MuiSelect-select": { py: 0, px: 0.75 } }}
         >
           {MODEL_OPTIONS.map((m) => (
-            <MenuItem key={m.id} value={m.id} sx={{ fontSize: "0.7rem" }}>{m.label}</MenuItem>
+            <MenuItem key={m.id} value={m.id} sx={{ fontSize: "0.88rem" }}>{m.label}</MenuItem>
           ))}
         </Select>
       </Box>
@@ -220,7 +220,7 @@ function MessageBubble({ role, content, tools }: { role: string; content: string
     <Box sx={{ mb: 1.5, display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start" }}>
       {!isUser && tools && tools.length > 0 && (
         <Box onClick={() => setToolsOpen((v) => !v)} sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.4, cursor: "pointer", color: "text.secondary", "&:hover": { color: "text.primary" } }}>
-          <Typography variant="caption" sx={{ fontSize: "0.65rem", fontWeight: 500 }}>
+          <Typography variant="caption" sx={{ fontSize: "0.95rem", fontWeight: 500 }}>
             {toolsOpen ? "▾" : "▸"} {tools.length} tool{tools.length !== 1 ? "s" : ""}
           </Typography>
         </Box>
@@ -236,16 +236,16 @@ function MessageBubble({ role, content, tools }: { role: string; content: string
           borderRadius: isUser ? "12px 12px 3px 12px" : "12px 12px 12px 3px",
           bgcolor: isUser ? "primary.main" : "#F4F4F6",
           color: isUser ? "#fff" : "text.primary",
-          "& p": { m: 0, fontSize: "0.8rem", lineHeight: 1.55, "&:last-child": { mb: 0 } },
-          "& code": { fontFamily: "monospace", fontSize: "0.74rem", bgcolor: isUser ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.07)", px: 0.5, borderRadius: 0.5 },
-          "& pre": { bgcolor: isUser ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)", borderRadius: 1, p: 1, overflowX: "auto", "& code": { bgcolor: "transparent", px: 0, fontSize: "0.72rem" } },
+          "& p": { m: 0, fontSize: "0.95rem", lineHeight: 1.55, "&:last-child": { mb: 0 } },
+          "& code": { fontFamily: "monospace", fontSize: "0.9rem", bgcolor: isUser ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.07)", px: 0.5, borderRadius: 0.5 },
+          "& pre": { bgcolor: isUser ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)", borderRadius: 1, p: 1, overflowX: "auto", "& code": { bgcolor: "transparent", px: 0, fontSize: "0.88rem" } },
           "& a": { color: isUser ? "#fff" : "primary.main" },
           "& ul, & ol": { pl: 2, mb: 0.5 },
-          "& li": { fontSize: "0.8rem" },
+          "& li": { fontSize: "0.95rem" },
         }}
       >
         {isUser ? (
-          <Typography variant="body2" sx={{ fontSize: "0.8rem", lineHeight: 1.55 }}>{content}</Typography>
+          <Typography variant="body2" sx={{ fontSize: "0.95rem", lineHeight: 1.55 }}>{content}</Typography>
         ) : (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         )}
@@ -259,7 +259,7 @@ function ToolActivityList({ activities }: { activities: ToolActivity[] }) {
     return (
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.6, py: 0.4 }}>
         <CircularProgress size={10} thickness={5} sx={{ color: "#71717A" }} />
-        <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.68rem" }}>Thinking...</Typography>
+        <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.85rem" }}>Thinking...</Typography>
       </Box>
     );
   }
@@ -271,14 +271,14 @@ function ToolActivityList({ activities }: { activities: ToolActivity[] }) {
         return (
           <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.75, py: 0.3, borderRadius: 1, bgcolor: `${meta.color}10`, opacity: isRunning ? 1 : 0.5 }}>
             {isRunning ? <CircularProgress size={9} thickness={5} sx={{ color: meta.color }} /> : <Box sx={{ color: meta.color, display: "flex" }}>{meta.icon}</Box>}
-            <Typography variant="caption" sx={{ color: meta.color, fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase" }}>{meta.label}</Typography>
+            <Typography variant="caption" sx={{ color: meta.color, fontSize: "0.95rem", fontWeight: 700, textTransform: "uppercase" }}>{meta.label}</Typography>
           </Box>
         );
       })}
       {activities.some((a) => a.status === "running") && (
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.75, py: 0.3 }}>
           <CircularProgress size={9} thickness={5} sx={{ color: "#71717A" }} />
-          <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.65rem" }}>working...</Typography>
+          <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.95rem" }}>working...</Typography>
         </Box>
       )}
     </Box>
