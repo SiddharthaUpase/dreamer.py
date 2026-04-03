@@ -5,11 +5,13 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import IconButton from "@mui/material/IconButton";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
+import Divider from "@mui/material/Divider";
 
 interface Project {
   id: string;
@@ -55,32 +57,49 @@ export default function ProjectCard({ project, onClick, onDelete }: Props) {
         borderRadius: 3,
         overflow: "hidden",
         cursor: "pointer",
-        transition: "all 0.2s ease",
+        transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
         "&:hover": {
-          borderColor: "primary.main",
-          boxShadow: "0 8px 24px 0 rgba(0,0,0,0.3)",
+          borderColor: "primary.light",
+          boxShadow:
+            "0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 10px 15px -3px rgba(0, 0, 0, 0.08)",
           transform: "translateY(-2px)",
+          "& .card-menu-btn": {
+            opacity: 1,
+          },
         },
       }}
     >
       {/* Thumbnail */}
       <Box
         sx={{
-          height: 120,
+          height: 130,
           background: getGradient(project.name),
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           position: "relative",
+          overflow: "hidden",
         }}
       >
+        {/* Decorative pattern */}
+        <Box
+          sx={{
+            position: "absolute",
+            inset: 0,
+            opacity: 0.1,
+            background:
+              "radial-gradient(circle at 30% 50%, rgba(255,255,255,0.4) 0%, transparent 60%), radial-gradient(circle at 70% 80%, rgba(255,255,255,0.3) 0%, transparent 50%)",
+          }}
+        />
         <Typography
           sx={{
-            color: "rgba(255,255,255,0.85)",
-            fontWeight: 700,
-            fontSize: "2rem",
+            color: "rgba(255,255,255,0.9)",
+            fontWeight: 800,
+            fontSize: "2.2rem",
             textTransform: "uppercase",
             userSelect: "none",
+            zIndex: 1,
+            textShadow: "0 2px 4px rgba(0,0,0,0.1)",
           }}
         >
           {project.name.charAt(0)}
@@ -102,21 +121,31 @@ export default function ProjectCard({ project, onClick, onDelete }: Props) {
             variant="body2"
             fontWeight={600}
             noWrap
-            sx={{ color: "text.primary", lineHeight: 1.4 }}
+            sx={{ color: "text.primary", lineHeight: 1.4, fontSize: "0.85rem" }}
           >
             {project.name}
           </Typography>
-          <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.7rem" }}>
-            {project.lastEdited}
+          <Typography
+            variant="caption"
+            sx={{ color: "text.secondary", fontSize: "0.7rem" }}
+          >
+            Edited {project.lastEdited}
           </Typography>
         </Box>
         <IconButton
+          className="card-menu-btn"
           size="small"
           onClick={(e) => {
             e.stopPropagation();
             setAnchorEl(e.currentTarget);
           }}
-          sx={{ color: "text.secondary", ml: 0.5, "&:hover": { color: "text.primary" } }}
+          sx={{
+            color: "text.secondary",
+            ml: 0.5,
+            opacity: { xs: 1, md: 0 },
+            transition: "opacity 0.15s ease",
+            "&:hover": { color: "text.primary", bgcolor: "action.hover" },
+          }}
         >
           <MoreHorizIcon fontSize="small" />
         </IconButton>
@@ -128,8 +157,32 @@ export default function ProjectCard({ project, onClick, onDelete }: Props) {
             setAnchorEl(null);
           }}
           onClick={(e) => e.stopPropagation()}
-          slotProps={{ paper: { sx: { minWidth: 140, borderRadius: 2 } } }}
+          slotProps={{
+            paper: {
+              sx: {
+                minWidth: 160,
+                borderRadius: 2,
+                border: "1px solid",
+                borderColor: "divider",
+                boxShadow:
+                  "0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 10px 15px -3px rgba(0, 0, 0, 0.08)",
+              },
+            },
+          }}
         >
+          <MenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              setAnchorEl(null);
+              onClick();
+            }}
+          >
+            <ListItemIcon>
+              <OpenInNewIcon fontSize="small" sx={{ color: "text.secondary" }} />
+            </ListItemIcon>
+            <ListItemText>Open</ListItemText>
+          </MenuItem>
+          <Divider sx={{ my: 0.5 }} />
           <MenuItem
             onClick={(e) => {
               e.stopPropagation();
@@ -138,7 +191,12 @@ export default function ProjectCard({ project, onClick, onDelete }: Props) {
             }}
             sx={{ color: "error.main" }}
           >
-            <ListItemIcon><DeleteOutlineIcon fontSize="small" sx={{ color: "error.main" }} /></ListItemIcon>
+            <ListItemIcon>
+              <DeleteOutlineIcon
+                fontSize="small"
+                sx={{ color: "error.main" }}
+              />
+            </ListItemIcon>
             <ListItemText>Delete</ListItemText>
           </MenuItem>
         </Menu>

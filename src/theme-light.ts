@@ -6,7 +6,7 @@ const lightTheme = createTheme({
   palette: {
     mode: "light",
     background: {
-      default: "#F4F4F5",
+      default: "#F8F9FB",
       paper: "#FFFFFF",
     },
     primary: {
@@ -17,11 +17,19 @@ const lightTheme = createTheme({
     secondary: {
       main: "#EC4899",
     },
-    text: {
-      primary: "#18181B",
-      secondary: "#71717A",
+    error: {
+      main: "#EF4444",
+      dark: "#DC2626",
+      light: "#FEE2E2",
     },
-    divider: "#E4E4E7",
+    text: {
+      primary: "#111827",
+      secondary: "#6B7280",
+    },
+    divider: "#E5E7EB",
+    action: {
+      hover: "rgba(0, 0, 0, 0.04)",
+    },
   },
   shape: {
     borderRadius: 10,
@@ -34,7 +42,8 @@ const lightTheme = createTheme({
       styleOverrides: {
         root: {
           backgroundImage: "none",
-          boxShadow: "0 1px 3px 0 rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.05)",
+          boxShadow:
+            "0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04)",
         },
       },
     },
@@ -42,7 +51,17 @@ const lightTheme = createTheme({
       styleOverrides: {
         root: {
           textTransform: "none",
-          fontWeight: 500,
+          fontWeight: 600,
+        },
+      },
+    },
+    MuiDialog: {
+      styleOverrides: {
+        root: {
+          "& .MuiBackdrop-root": {
+            backgroundColor: "rgba(0, 0, 0, 0.4)",
+            backdropFilter: "blur(4px)",
+          },
         },
       },
     },
