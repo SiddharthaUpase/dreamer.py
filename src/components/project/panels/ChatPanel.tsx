@@ -24,7 +24,7 @@ import LanguageIcon from "@mui/icons-material/Language";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, ToolActivity, ContextInfo } from "@/hooks/useProject";
-import { MODEL_OPTIONS } from "@/hooks/useProject";
+import { MODEL_PRESETS, CUSTOM_MODELS } from "@/hooks/useProject";
 
 const TOOL_META: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
   bash:         { icon: <TerminalIcon    sx={{ fontSize: 11 }} />, label: "Bash",        color: "#16A34A" },
@@ -196,18 +196,84 @@ export default function ChatPanel({
             </IconButton>
           </Tooltip>
         </Box>
-        <Select
-          size="small"
-          value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
-          disabled={loading}
-          sx={{ fontSize: "0.95rem", height: 22, "& .MuiSelect-select": { py: 0, px: 0.75 } }}
-        >
-          {MODEL_OPTIONS.map((m) => (
-            <MenuItem key={m.id} value={m.id} sx={{ fontSize: "0.88rem" }}>{m.label}</MenuItem>
-          ))}
-        </Select>
+        <ModelSelector selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={loading} />
       </Box>
+    </Box>
+  );
+}
+
+function ModelSelector({ selectedModel, setSelectedModel, disabled }: { selectedModel: string; setSelectedModel: (v: string) => void; disabled: boolean }) {
+  // Check if current model matches a preset
+  const activePreset = MODEL_PRESETS.find((p) => p.id === selectedModel);
+
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+      {/* Segmented toggle for lite / pro / max */}
+      <Box
+        sx={{
+          display: "flex",
+          borderRadius: 1,
+          border: "1px solid",
+          borderColor: "divider",
+          overflow: "hidden",
+        }}
+      >
+        {MODEL_PRESETS.map((preset) => (
+          <Box
+            key={preset.id}
+            onClick={() => { if (!disabled) setSelectedModel(preset.id); }}
+            sx={{
+              px: 1,
+              py: 0.25,
+              cursor: disabled ? "default" : "pointer",
+              fontSize: "0.78rem",
+              fontWeight: selectedModel === preset.id ? 700 : 400,
+              bgcolor: selectedModel === preset.id ? "primary.main" : "transparent",
+              color: selectedModel === preset.id ? "#fff" : "text.secondary",
+              transition: "all 0.15s",
+              userSelect: "none",
+              "&:hover": disabled ? {} : {
+                bgcolor: selectedModel === preset.id ? "primary.main" : "rgba(0,0,0,0.04)",
+              },
+            }}
+          >
+            {preset.name}
+          </Box>
+        ))}
+      </Box>
+
+      {/* Custom model dropdown */}
+      <Select
+        size="small"
+        value={activePreset ? "" : selectedModel}
+        displayEmpty
+        onChange={(e) => {
+          if (e.target.value) {
+            setSelectedModel(e.target.value);
+          }
+        }}
+        disabled={disabled}
+        renderValue={(value) => {
+          if (!value) return <Typography sx={{ fontSize: "0.75rem", color: "text.secondary" }}>...</Typography>;
+          const model = CUSTOM_MODELS.find((m) => m.id === value);
+          return <Typography sx={{ fontSize: "0.75rem" }}>{model?.label || value}</Typography>;
+        }}
+        sx={{
+          fontSize: "0.75rem",
+          height: 22,
+          minWidth: 28,
+          "& .MuiSelect-select": { py: 0, px: 0.5 },
+        }}
+      >
+        {CUSTOM_MODELS.map((m) => (
+          <MenuItem key={m.id} value={m.id} sx={{ fontSize: "0.82rem" }}>
+            <Box>
+              <Typography sx={{ fontSize: "0.82rem", fontWeight: 500 }}>{m.label}</Typography>
+              <Typography sx={{ fontSize: "0.72rem", color: "text.secondary" }}>{m.desc}</Typography>
+            </Box>
+          </MenuItem>
+        ))}
+      </Select>
     </Box>
   );
 }
