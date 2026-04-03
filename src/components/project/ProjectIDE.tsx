@@ -62,7 +62,7 @@ export default function ProjectIDE({ projectId }: Props) {
     if (!layoutInitialized.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      console.log("[layout] saving layout to server...", JSON.stringify(layout).slice(0, 200));
+      console.log("[layout] saving layout to server...");
       saveLayout(layout);
     }, 500);
     return () => {
@@ -97,7 +97,6 @@ export default function ProjectIDE({ projectId }: Props) {
   }
 
   const handleAddPanel = (panelType: PanelType) => {
-    // Find the first panel to add next to
     const findFirstPanel = (node: typeof layout.root): string | null => {
       if (node.type === "panel") return node.id;
       for (const child of node.children) {

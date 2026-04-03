@@ -25,20 +25,22 @@ export type SandboxStatus = "loading" | "ready" | "error";
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
 
 export const MODEL_PRESETS = [
-  { id: "minimax",       name: "lite", label: "Lite — fast and lightweight" },
-  { id: "mimo",          name: "pro",  label: "Pro — thorough and reliable" },
-  { id: "claude-sonnet", name: "max",  label: "Max — expert with vision" },
+  { id: "minimax",       name: "lite", label: "Lite — fast and lightweight", desc: "fast and lightweight" },
+  { id: "mimo",          name: "pro",  label: "Pro — thorough and reliable", desc: "thorough and reliable" },
+  { id: "claude-sonnet", name: "max",  label: "Max — expert with vision", desc: "expert with vision" },
+] as const;
+
+export const CUSTOM_MODELS = [
+  { id: "claude-sonnet", label: "Claude Sonnet 4.6",  desc: "vision, expert reasoning" },
+  { id: "claude-haiku",  label: "Claude Haiku 4.5",   desc: "fast, vision support" },
+  { id: "minimax",       label: "MiniMax M2.7",       desc: "lightweight, fast tasks" },
+  { id: "kimi",          label: "Kimi K2.5",          desc: "long context, reasoning" },
+  { id: "mimo",          label: "MiMo V2 Pro",        desc: "thorough, code-focused" },
+  { id: "kat-coder",     label: "KAT-Coder Pro V2",   desc: "enterprise coding, SaaS" },
+  { id: "qwen",          label: "Qwen 3.6 Plus Preview", desc: "preview model" },
 ];
 
-export const MODEL_OPTIONS = [
-  { id: "claude-sonnet", label: "Claude Sonnet 4.6" },
-  { id: "claude-haiku",  label: "Claude Haiku 4.5" },
-  { id: "minimax",       label: "MiniMax M2.7" },
-  { id: "kimi",          label: "Kimi K2.5" },
-  { id: "mimo",          label: "MiMo V2 Pro" },
-  { id: "kat-coder",     label: "KAT-Coder Pro V2" },
-  { id: "qwen",          label: "Qwen 3.6 Plus Preview" },
-];
+export const MODEL_OPTIONS = CUSTOM_MODELS;
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const supabase = createClient();
