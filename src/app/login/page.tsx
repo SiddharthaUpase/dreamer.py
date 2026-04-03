@@ -125,7 +125,6 @@ export default function LoginPage() {
             >
               &ldquo;Every block of stone has a statue inside it, and it is the task of the sculptor to discover it.&rdquo;
             </Typography>
-            <Box sx={{ width: 60, height: 1, bgcolor: "rgba(245, 240, 232, 0.3)", mx: "auto", mb: 2.5 }} />
             <Typography
               sx={{
                 fontFamily: '"Cormorant Garamond", serif',
