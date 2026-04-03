@@ -6,36 +6,36 @@ const lightTheme = createTheme({
   palette: {
     mode: "light",
     background: {
-      default: "#F8F9FB",
-      paper: "#FFFFFF",
+      default: "#F5F0E8",
+      paper: "#FFFDF7",
     },
     primary: {
-      main: "#6366F1",
-      dark: "#4F46E5",
-      light: "#818CF8",
+      main: "#8B6914",
+      dark: "#6B4F0E",
+      light: "#B8941F",
     },
     secondary: {
-      main: "#EC4899",
+      main: "#A0522D",
     },
     error: {
-      main: "#EF4444",
-      dark: "#DC2626",
-      light: "#FEE2E2",
+      main: "#C53030",
+      dark: "#9B2C2C",
+      light: "#FED7D7",
     },
     text: {
-      primary: "#111827",
-      secondary: "#6B7280",
+      primary: "#2C2416",
+      secondary: "#7A6B55",
     },
-    divider: "#E5E7EB",
+    divider: "#D4C9B5",
     action: {
-      hover: "rgba(0, 0, 0, 0.04)",
+      hover: "rgba(139, 105, 20, 0.06)",
     },
   },
   shape: {
     borderRadius: 10,
   },
   typography: {
-    fontFamily: "var(--font-geist-sans), system-ui, sans-serif",
+    fontFamily: '"Cormorant Garamond", "Georgia", serif',
   },
   components: {
     MuiPaper: {
@@ -43,7 +43,7 @@ const lightTheme = createTheme({
         root: {
           backgroundImage: "none",
           boxShadow:
-            "0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04)",
+            "0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.04)",
         },
       },
     },
@@ -59,7 +59,7 @@ const lightTheme = createTheme({
       styleOverrides: {
         root: {
           "& .MuiBackdrop-root": {
-            backgroundColor: "rgba(0, 0, 0, 0.4)",
+            backgroundColor: "rgba(44, 36, 22, 0.4)",
             backdropFilter: "blur(4px)",
           },
         },
