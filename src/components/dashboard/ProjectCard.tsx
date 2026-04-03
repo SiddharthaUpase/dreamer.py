@@ -5,6 +5,7 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import ShareIcon from "@mui/icons-material/Share";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import IconButton from "@mui/material/IconButton";
 import Menu from "@mui/material/Menu";
@@ -12,17 +13,20 @@ import MenuItem from "@mui/material/MenuItem";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import Divider from "@mui/material/Divider";
+import Chip from "@mui/material/Chip";
 
 interface Project {
   id: string;
   name: string;
   lastEdited: string;
+  shared?: boolean;
 }
 
 interface Props {
   project: Project;
   onClick: () => void;
   onDelete: (id: string) => void;
+  onShare?: (id: string, email: string) => Promise<string>;
 }
 
 const GRADIENTS = [
@@ -44,7 +48,7 @@ function getGradient(name: string): string {
   return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
 }
 
-export default function ProjectCard({ project, onClick, onDelete }: Props) {
+export default function ProjectCard({ project, onClick, onDelete, onShare }: Props) {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
   return (
@@ -131,6 +135,9 @@ export default function ProjectCard({ project, onClick, onDelete }: Props) {
           >
             Edited {project.lastEdited}
           </Typography>
+          {project.shared && (
+            <Chip label="shared" size="small" sx={{ height: 18, fontSize: "0.6rem", bgcolor: "rgba(99,102,241,0.15)", color: "primary.main" }} />
+          )}
         </Box>
         <IconButton
           className="card-menu-btn"
@@ -182,12 +189,32 @@ export default function ProjectCard({ project, onClick, onDelete }: Props) {
             </ListItemIcon>
             <ListItemText>Open</ListItemText>
           </MenuItem>
+          {onShare && (
+            <MenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                setAnchorEl(null);
+                const email = prompt("Share with (email):");
+                if (email) {
+                  onShare(project.id, email).then((err) => {
+                    if (err) alert(err);
+                    else alert("Shared successfully");
+                  });
+                }
+              }}
+            >
+              <ListItemIcon><ShareIcon fontSize="small" /></ListItemIcon>
+              <ListItemText>Share</ListItemText>
+            </MenuItem>
+          )}
           <Divider sx={{ my: 0.5 }} />
           <MenuItem
             onClick={(e) => {
               e.stopPropagation();
               setAnchorEl(null);
-              onDelete(project.id);
+              if (confirm(`Delete "${project.name}"? This cannot be undone.`)) {
+                onDelete(project.id);
+              }
             }}
             sx={{ color: "error.main" }}
           >
