@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
@@ -8,6 +8,12 @@ import TextField from "@mui/material/TextField";
 import InputAdornment from "@mui/material/InputAdornment";
 import Tooltip from "@mui/material/Tooltip";
 import CircularProgress from "@mui/material/CircularProgress";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
+import DialogActions from "@mui/material/DialogActions";
+import Button from "@mui/material/Button";
+import Chip from "@mui/material/Chip";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -17,6 +23,10 @@ import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import SmartphoneIcon from "@mui/icons-material/Smartphone";
 import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
+import ShareIcon from "@mui/icons-material/Share";
+import AttachFileIcon from "@mui/icons-material/AttachFile";
+import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
+import CloseIcon from "@mui/icons-material/Close";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
 import TerminalIcon from "@mui/icons-material/Terminal";
@@ -29,7 +39,7 @@ import CompressIcon from "@mui/icons-material/Compress";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { useRouter } from "next/navigation";
 import { useProject, MODEL_OPTIONS } from "@/hooks/useProject";
-import type { ToolActivity } from "@/hooks/useProject";
+import type { ToolActivity, UploadedFile } from "@/hooks/useProject";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -74,6 +84,13 @@ export default function ProjectIDE({ projectId }: Props) {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const prevLoadingRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Share dialog state
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareEmail, setShareEmail] = useState("");
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareResult, setShareResult] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   const {
     messages,
@@ -92,12 +109,50 @@ export default function ProjectIDE({ projectId }: Props) {
     contextInfo,
     compacting,
     messagesEndRef,
+    pendingUploads,
+    uploading,
     handleSend,
     handleAbort,
     handleClose,
     handleClearChat,
     handleCompact,
+    handleShare,
+    handleUploadFiles,
+    removePendingUpload,
   } = useProject(projectId);
+
+  const onShareSubmit = useCallback(async () => {
+    if (!shareEmail.trim()) return;
+    setShareLoading(true);
+    setShareResult(null);
+    const result = await handleShare(shareEmail.trim());
+    if (result.status === "error") {
+      setShareResult({ type: "error", message: result.error || "Failed to share" });
+    } else if (result.status === "already_shared") {
+      setShareResult({ type: "success", message: "This user already has access." });
+    } else {
+      setShareResult({ type: "success", message: `Shared with ${shareEmail.trim()}` });
+      setShareEmail("");
+    }
+    setShareLoading(false);
+  }, [shareEmail, handleShare]);
+
+  const onFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleUploadFiles(e.target.files);
+      e.target.value = "";
+    }
+  }, [handleUploadFiles]);
+
+  // Drag-and-drop handler
+  const [dragOver, setDragOver] = useState(false);
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files.length > 0) {
+      handleUploadFiles(e.dataTransfer.files);
+    }
+  }, [handleUploadFiles]);
 
   // Show final response as a toast for 3s in direct mode
   useEffect(() => {
@@ -224,6 +279,16 @@ export default function ProjectIDE({ projectId }: Props) {
           )}
         </Box>
 
+        <Tooltip title="Share project">
+          <IconButton
+            size="small"
+            onClick={() => { setShareOpen(true); setShareResult(null); }}
+            sx={{ color: "text.secondary" }}
+          >
+            <ShareIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+
         <Tooltip title={expanded ? "Direct mode" : "Expanded mode"}>
           <IconButton
             size="small"
@@ -234,6 +299,71 @@ export default function ProjectIDE({ projectId }: Props) {
           </IconButton>
         </Tooltip>
       </Box>
+
+      {/* Share dialog */}
+      <Dialog
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 700, fontSize: "1rem", pb: 0.5 }}>
+          Share Project
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: "text.secondary", mb: 2, fontSize: "0.82rem" }}>
+            Enter the email of the person you want to share this project with.
+          </Typography>
+          <TextField
+            autoFocus
+            fullWidth
+            size="small"
+            placeholder="user@example.com"
+            value={shareEmail}
+            onChange={(e) => setShareEmail(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onShareSubmit(); }}
+            disabled={shareLoading}
+            sx={{ "& .MuiOutlinedInput-root": { borderRadius: 2 } }}
+          />
+          {shareResult && (
+            <Typography
+              variant="caption"
+              sx={{
+                display: "block",
+                mt: 1,
+                color: shareResult.type === "error" ? "error.main" : "success.main",
+                fontSize: "0.78rem",
+              }}
+            >
+              {shareResult.message}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setShareOpen(false)} size="small" sx={{ textTransform: "none" }}>
+            Cancel
+          </Button>
+          <Button
+            onClick={onShareSubmit}
+            variant="contained"
+            size="small"
+            disabled={!shareEmail.trim() || shareLoading}
+            sx={{ textTransform: "none", borderRadius: 2 }}
+          >
+            {shareLoading ? <CircularProgress size={16} sx={{ color: "#fff" }} /> : "Share"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Hidden file input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={onFileSelect}
+        multiple
+        style={{ display: "none" }}
+      />
 
       {/* Main area */}
       <Box sx={{ flex: 1, display: "flex", overflow: "hidden" }}>
@@ -256,7 +386,25 @@ export default function ProjectIDE({ projectId }: Props) {
             </Box>
 
             {/* Chat panel */}
-            <Box sx={{ flex: 1, display: "flex", flexDirection: "column", bgcolor: "background.paper", overflow: "hidden" }}>
+            <Box
+              sx={{ flex: 1, display: "flex", flexDirection: "column", bgcolor: "background.paper", overflow: "hidden" }}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={onDrop}
+            >
+              {dragOver && (
+                <Box sx={{
+                  position: "absolute", inset: 0, zIndex: 10,
+                  bgcolor: "rgba(99,102,241,0.08)", border: "2px dashed",
+                  borderColor: "primary.main", borderRadius: 2,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  pointerEvents: "none",
+                }}>
+                  <Typography sx={{ color: "primary.main", fontWeight: 600, fontSize: "0.9rem" }}>
+                    Drop files to upload
+                  </Typography>
+                </Box>
+              )}
               <Box sx={{ flex: 1, overflowY: "auto", px: 3, py: 2.5 }}>
                 {messages.length === 0 && (
                   <Typography variant="body2" sx={{ color: "text.secondary", textAlign: "center", mt: 4 }}>
@@ -275,6 +423,10 @@ export default function ProjectIDE({ projectId }: Props) {
                 onSend={handleSend}
                 onAbort={handleAbort}
                 loading={loading}
+                pendingUploads={pendingUploads}
+                uploading={uploading}
+                onRemoveUpload={removePendingUpload}
+                onAttachClick={() => fileInputRef.current?.click()}
               />
               <ContextModelBar
                 contextInfo={contextInfo}
@@ -410,6 +562,10 @@ export default function ProjectIDE({ projectId }: Props) {
                   onSend={handleSend}
                   onAbort={handleAbort}
                   loading={loading}
+                  pendingUploads={pendingUploads}
+                  uploading={uploading}
+                  onRemoveUpload={removePendingUpload}
+                  onAttachClick={() => fileInputRef.current?.click()}
                 />
                 <ContextModelBar
                   contextInfo={contextInfo}
@@ -551,9 +707,22 @@ function IframeFrame({
   );
 }
 
+/** Strip [uploaded file: ...] markers from display text and extract file info */
+function parseUploads(content: string): { cleanContent: string; uploads: string[] } {
+  const uploadPattern = /\[uploaded file: ([^\]]+)\]/g;
+  const uploads: string[] = [];
+  let match;
+  while ((match = uploadPattern.exec(content)) !== null) {
+    uploads.push(match[1]);
+  }
+  const cleanContent = content.replace(/\[uploaded file: [^\]]+\]\n?/g, "").trim();
+  return { cleanContent, uploads };
+}
+
 function ChatMessage({ role, content, tools }: { role: string; content: string; tools?: ToolActivity[] }) {
   const isUser = role === "user";
   const [toolsOpen, setToolsOpen] = useState(false);
+  const { cleanContent, uploads } = parseUploads(content);
 
   return (
     <Box sx={{ mb: 2, display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start" }}>
@@ -584,59 +753,87 @@ function ChatMessage({ role, content, tools }: { role: string; content: string; 
         </Box>
       )}
 
+      {/* Uploaded file chips — shown above the message bubble */}
+      {uploads.length > 0 && (
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mb: 0.5, maxWidth: "85%" }}>
+          {uploads.map((path, i) => (
+            <Chip
+              key={i}
+              icon={<InsertDriveFileIcon sx={{ fontSize: "13px !important" }} />}
+              label={path.split("/").pop() || path}
+              size="small"
+              sx={{
+                height: 24,
+                bgcolor: isUser ? "rgba(255,255,255,0.15)" : "#F0EFFF",
+                border: "1px solid",
+                borderColor: isUser ? "rgba(255,255,255,0.2)" : "rgba(99,102,241,0.15)",
+                "& .MuiChip-icon": { color: isUser ? "rgba(255,255,255,0.7)" : "primary.main" },
+                "& .MuiChip-label": {
+                  fontSize: "0.7rem",
+                  fontWeight: 500,
+                  color: isUser ? "rgba(255,255,255,0.9)" : "text.primary",
+                },
+              }}
+            />
+          ))}
+        </Box>
+      )}
+
       {/* Message bubble */}
-      <Box
-        sx={{
-          maxWidth: "85%", px: 2, py: 1.25,
-          borderRadius: isUser ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-          bgcolor: isUser ? "primary.main" : "#F4F4F6",
-          color: isUser ? "#fff" : "text.primary",
-          // Markdown styles
-          "& p": { m: 0, mb: 0.75, fontSize: "0.82rem", lineHeight: 1.6, "&:last-child": { mb: 0 } },
-          "& p + p": { mt: 0.5 },
-          "& strong": { fontWeight: 700 },
-          "& em": { fontStyle: "italic" },
-          "& ul, & ol": { pl: 2.5, mb: 0.5, mt: 0.25 },
-          "& li": { fontSize: "0.82rem", lineHeight: 1.6, mb: 0.25 },
-          "& h1, & h2, & h3": { fontWeight: 700, mt: 1, mb: 0.5, lineHeight: 1.3 },
-          "& h1": { fontSize: "1rem" },
-          "& h2": { fontSize: "0.9rem" },
-          "& h3": { fontSize: "0.85rem" },
-          "& code": {
-            fontFamily: "var(--font-geist-mono), monospace",
-            fontSize: "0.76rem",
-            bgcolor: isUser ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.07)",
-            px: 0.6, py: 0.15,
-            borderRadius: 0.75,
-          },
-          "& pre": {
-            bgcolor: isUser ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)",
-            border: "1px solid",
-            borderColor: isUser ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.08)",
-            borderRadius: 1.5,
-            p: 1.25,
-            overflowX: "auto",
-            mt: 0.5, mb: 0.75,
-            "& code": { bgcolor: "transparent", px: 0, py: 0, fontSize: "0.75rem" },
-          },
-          "& a": { color: isUser ? "#fff" : "primary.main", textDecoration: "underline" },
-          "& blockquote": {
-            borderLeft: "3px solid",
-            borderColor: isUser ? "rgba(255,255,255,0.4)" : "divider",
-            pl: 1.5, ml: 0, my: 0.5,
-            "& p": { color: isUser ? "rgba(255,255,255,0.8)" : "text.secondary" },
-          },
-          "& hr": { border: "none", borderTop: "1px solid", borderColor: "divider", my: 1 },
-        }}
-      >
-        {isUser ? (
-          <Typography variant="body2" sx={{ lineHeight: 1.55, fontSize: "0.82rem" }}>
-            {content}
-          </Typography>
-        ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-        )}
-      </Box>
+      {cleanContent && (
+        <Box
+          sx={{
+            maxWidth: "85%", px: 2, py: 1.25,
+            borderRadius: isUser ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+            bgcolor: isUser ? "primary.main" : "#F4F4F6",
+            color: isUser ? "#fff" : "text.primary",
+            // Markdown styles
+            "& p": { m: 0, mb: 0.75, fontSize: "0.82rem", lineHeight: 1.6, "&:last-child": { mb: 0 } },
+            "& p + p": { mt: 0.5 },
+            "& strong": { fontWeight: 700 },
+            "& em": { fontStyle: "italic" },
+            "& ul, & ol": { pl: 2.5, mb: 0.5, mt: 0.25 },
+            "& li": { fontSize: "0.82rem", lineHeight: 1.6, mb: 0.25 },
+            "& h1, & h2, & h3": { fontWeight: 700, mt: 1, mb: 0.5, lineHeight: 1.3 },
+            "& h1": { fontSize: "1rem" },
+            "& h2": { fontSize: "0.9rem" },
+            "& h3": { fontSize: "0.85rem" },
+            "& code": {
+              fontFamily: "var(--font-geist-mono), monospace",
+              fontSize: "0.76rem",
+              bgcolor: isUser ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.07)",
+              px: 0.6, py: 0.15,
+              borderRadius: 0.75,
+            },
+            "& pre": {
+              bgcolor: isUser ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)",
+              border: "1px solid",
+              borderColor: isUser ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.08)",
+              borderRadius: 1.5,
+              p: 1.25,
+              overflowX: "auto",
+              mt: 0.5, mb: 0.75,
+              "& code": { bgcolor: "transparent", px: 0, py: 0, fontSize: "0.75rem" },
+            },
+            "& a": { color: isUser ? "#fff" : "primary.main", textDecoration: "underline" },
+            "& blockquote": {
+              borderLeft: "3px solid",
+              borderColor: isUser ? "rgba(255,255,255,0.4)" : "divider",
+              pl: 1.5, ml: 0, my: 0.5,
+              "& p": { color: isUser ? "rgba(255,255,255,0.8)" : "text.secondary" },
+            },
+            "& hr": { border: "none", borderTop: "1px solid", borderColor: "divider", my: 1 },
+          }}
+        >
+          {isUser ? (
+            <Typography variant="body2" sx={{ lineHeight: 1.55, fontSize: "0.82rem" }}>
+              {cleanContent}
+            </Typography>
+          ) : (
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanContent}</ReactMarkdown>
+          )}
+        </Box>
+      )}
     </Box>
   );
 }
@@ -732,15 +929,62 @@ function ChatInputBar({
   onSend,
   onAbort,
   loading,
+  pendingUploads = [],
+  uploading = false,
+  onRemoveUpload,
+  onAttachClick,
 }: {
   input: string;
   setInput: (v: string) => void;
   onSend: () => void;
   onAbort: () => void;
   loading: boolean;
+  pendingUploads?: UploadedFile[];
+  uploading?: boolean;
+  onRemoveUpload?: (index: number) => void;
+  onAttachClick?: () => void;
 }) {
   return (
     <Box sx={{ px: 3, pt: 1.5, pb: 2 }}>
+      {/* Pending upload chips */}
+      {(pendingUploads.length > 0 || uploading) && (
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mb: 1 }}>
+          {pendingUploads.map((file, i) => (
+            <Chip
+              key={i}
+              icon={<InsertDriveFileIcon sx={{ fontSize: "14px !important" }} />}
+              label={
+                <Box component="span" sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                  <span>{file.fileName}</span>
+                  <Typography component="span" sx={{ fontSize: "0.65rem", color: "text.secondary" }}>
+                    {file.size}
+                  </Typography>
+                </Box>
+              }
+              onDelete={() => onRemoveUpload?.(i)}
+              deleteIcon={<CloseIcon sx={{ fontSize: "14px !important" }} />}
+              size="small"
+              sx={{
+                height: 28,
+                bgcolor: "#F0EFFF",
+                border: "1px solid",
+                borderColor: "rgba(99,102,241,0.2)",
+                "& .MuiChip-icon": { color: "primary.main" },
+                "& .MuiChip-label": { fontSize: "0.76rem", fontWeight: 500 },
+                "& .MuiChip-deleteIcon": { color: "text.secondary", "&:hover": { color: "error.main" } },
+              }}
+            />
+          ))}
+          {uploading && (
+            <Chip
+              icon={<CircularProgress size={12} thickness={5} />}
+              label="Uploading..."
+              size="small"
+              sx={{ height: 28, bgcolor: "#F4F4F5", "& .MuiChip-label": { fontSize: "0.76rem" } }}
+            />
+          )}
+        </Box>
+      )}
 
       <TextField
         fullWidth
@@ -758,6 +1002,20 @@ function ChatInputBar({
         }}
         disabled={loading}
         InputProps={{
+          startAdornment: (
+            <InputAdornment position="start">
+              <Tooltip title="Attach files">
+                <IconButton
+                  size="small"
+                  onClick={onAttachClick}
+                  disabled={loading}
+                  sx={{ width: 28, height: 28, color: "text.secondary", "&:hover": { color: "primary.main" } }}
+                >
+                  <AttachFileIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Tooltip>
+            </InputAdornment>
+          ),
           endAdornment: (
             <InputAdornment position="end">
               {loading ? (
@@ -772,12 +1030,12 @@ function ChatInputBar({
                 <IconButton
                   size="small"
                   onClick={onSend}
-                  disabled={!input.trim()}
+                  disabled={!input.trim() && pendingUploads.length === 0}
                   sx={{
-                    bgcolor: input.trim() ? "primary.main" : "transparent",
-                    color: input.trim() ? "#fff" : "text.secondary",
+                    bgcolor: (input.trim() || pendingUploads.length > 0) ? "primary.main" : "transparent",
+                    color: (input.trim() || pendingUploads.length > 0) ? "#fff" : "text.secondary",
                     width: 28, height: 28,
-                    "&:hover": { bgcolor: input.trim() ? "primary.dark" : "transparent" },
+                    "&:hover": { bgcolor: (input.trim() || pendingUploads.length > 0) ? "primary.dark" : "transparent" },
                   }}
                 >
                   <SendIcon sx={{ fontSize: 14 }} />
