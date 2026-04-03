@@ -21,6 +21,7 @@ const CUSTOM_MODELS = [
   { id: "kimi",           label: "Kimi K2.5                long context, reasoning" },
   { id: "mimo",           label: "MiMo V2 Pro              thorough, code-focused" },
   { id: "kat-coder",      label: "KAT-Coder Pro V2         enterprise coding, SaaS" },
+  { id: "qwen",           label: "Qwen 3.6 Plus Preview   reasoning, multilingual" },
 ];
 
 function getModelDisplayName(modelId: string): string {

@@ -25,13 +25,18 @@ interface Props {
 
 export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState("blank");
+  const [template] = useState("nextjs");
+  const [error, setError] = useState("");
 
   function handleCreate() {
-    if (!name.trim()) return;
-    onCreate(name.trim(), template);
+    const sanitized = name.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    if (!sanitized) {
+      setError("Name must contain letters or numbers");
+      return;
+    }
+    setError("");
+    onCreate(sanitized, template);
     setName("");
-    setTemplate("blank");
     onClose();
   }
 
@@ -77,6 +82,8 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           placeholder="My Portfolio"
           value={name}
           onChange={(e) => setName(e.target.value)}
+          error={!!error}
+          helperText={error || "Lowercase letters, numbers, and hyphens only"}
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}
           sx={{
             mt: 0.5,
@@ -87,42 +94,6 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           }}
         />
 
-        <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 500 }}>
-          Start from
-        </Typography>
-        <Box sx={{ display: "flex", gap: 1.5, mt: 0.75 }}>
-          {TEMPLATES.map((t) => (
-            <Box
-              key={t.id}
-              onClick={() => setTemplate(t.id)}
-              sx={{
-                flex: 1,
-                border: "1.5px solid",
-                borderColor: template === t.id ? "primary.main" : "divider",
-                borderRadius: 2,
-                px: 2,
-                py: 1.5,
-                cursor: "pointer",
-                bgcolor: template === t.id ? "rgba(99,102,241,0.04)" : "transparent",
-                transition: "all 0.12s",
-                "&:hover": {
-                  borderColor: "primary.light",
-                },
-              }}
-            >
-              <Typography
-                variant="body2"
-                fontWeight={600}
-                sx={{ color: template === t.id ? "primary.main" : "text.primary" }}
-              >
-                {t.label}
-              </Typography>
-              <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                {t.description}
-              </Typography>
-            </Box>
-          ))}
-        </Box>
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 2.5 }}>

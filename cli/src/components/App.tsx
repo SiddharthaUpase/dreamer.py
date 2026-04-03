@@ -66,8 +66,10 @@ export function App() {
     }
   }, []);
 
-  // Auto-update check
+  // Auto-update check (skip in dev mode)
+  const isDev = process.env.NODE_ENV === "development" || process.argv.some((a) => a.includes("tsx"));
   useEffect(() => {
+    if (isDev) { setUpdateStatus(""); return; }
     fetch("https://registry.npmjs.org/dreamer-py/latest", { signal: AbortSignal.timeout(3000) })
       .then((res) => res.json())
       .then((data: any) => {

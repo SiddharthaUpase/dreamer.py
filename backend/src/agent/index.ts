@@ -75,6 +75,7 @@ export function buildModelFactory(apiKey: string): ModelFactory {
     "kimi": () => new ChatOpenAI({ ...orConfig, model: "moonshotai/kimi-k2.5" }),
     "mimo": () => new ChatOpenAI({ ...orConfig, model: "xiaomi/mimo-v2-pro" }),
     "kat-coder": () => new ChatOpenAI({ ...orConfig, model: "kwaipilot/kat-coder-pro-v2" }),
+    "qwen": () => new ChatOpenAI({ ...orConfig, model: "qwen/qwen3.6-plus:free" }),
   };
 }
 

@@ -17,6 +17,7 @@ export interface StoredProject {
   r2_secret_access_key: string | null;
   r2_token_id: string | null;
   r2_public_domain: string | null;
+  layout: any | null;
 }
 
 export interface StoredMessage {
