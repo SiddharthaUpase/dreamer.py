@@ -87,55 +87,56 @@ export default function LoginPage() {
           bgcolor: "#F5F0E8",
         }}
       >
-        {/* Left side — Renaissance art panel */}
+        {/* Left side — Renaissance sculpture panel */}
         <Box
           sx={{
             flex: "0 0 55%",
             display: { xs: "none", md: "flex" },
             flexDirection: "column",
-            justifyContent: "flex-end",
+            alignItems: "center",
+            justifyContent: "center",
             position: "relative",
             overflow: "hidden",
-            // Renaissance painting as background
-            backgroundImage: 'url("https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg/800px-Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg")',
+            backgroundImage: 'url("https://images.unsplash.com/photo-1561214115-f2f134cc4912?w=1200&q=80")',
             backgroundSize: "cover",
             backgroundPosition: "center",
           }}
         >
-          {/* Gradient overlay */}
+          {/* Dark overlay */}
           <Box
             sx={{
               position: "absolute",
               inset: 0,
-              background: "linear-gradient(to top, rgba(44, 36, 22, 0.85) 0%, rgba(44, 36, 22, 0.3) 40%, transparent 70%)",
+              background: "rgba(20, 16, 10, 0.6)",
             }}
           />
-          {/* Quote overlay */}
-          <Box sx={{ position: "relative", zIndex: 1, p: 6, pb: 8 }}>
+          {/* Centered quote */}
+          <Box sx={{ position: "relative", zIndex: 1, px: 8, textAlign: "center", maxWidth: 560 }}>
             <Typography
               sx={{
                 fontFamily: '"Cormorant Garamond", serif',
-                fontSize: "2rem",
+                fontSize: "2.8rem",
                 fontWeight: 300,
                 fontStyle: "italic",
                 color: "#F5F0E8",
-                lineHeight: 1.4,
-                maxWidth: 480,
-                mb: 2,
+                lineHeight: 1.35,
+                mb: 3,
               }}
             >
               &ldquo;Every block of stone has a statue inside it, and it is the task of the sculptor to discover it.&rdquo;
             </Typography>
+            <Box sx={{ width: 60, height: 1, bgcolor: "rgba(245, 240, 232, 0.3)", mx: "auto", mb: 2.5 }} />
             <Typography
               sx={{
                 fontFamily: '"Cormorant Garamond", serif',
-                fontSize: "1rem",
-                color: "rgba(245, 240, 232, 0.7)",
+                fontSize: "1.1rem",
+                color: "rgba(245, 240, 232, 0.6)",
                 fontWeight: 500,
-                letterSpacing: "0.1em",
+                letterSpacing: "0.15em",
+                textTransform: "uppercase",
               }}
             >
-              &mdash; MICHELANGELO
+              Michelangelo
             </Typography>
           </Box>
         </Box>
@@ -158,7 +159,7 @@ export default function LoginPage() {
               <Typography
                 sx={{
                   fontFamily: '"Cormorant Garamond", serif',
-                  fontSize: "2.2rem",
+                  fontSize: "2.8rem",
                   fontWeight: 700,
                   color: "#2C2416",
                   letterSpacing: "-0.02em",
@@ -170,9 +171,9 @@ export default function LoginPage() {
               <Typography
                 sx={{
                   fontFamily: '"Cormorant Garamond", serif',
-                  fontSize: "0.95rem",
+                  fontSize: "1.1rem",
                   color: "#7A6B55",
-                  mt: 0.75,
+                  mt: 1,
                   fontStyle: "italic",
                   fontWeight: 400,
                 }}
@@ -185,7 +186,7 @@ export default function LoginPage() {
             <Typography
               sx={{
                 fontFamily: '"Cormorant Garamond", serif',
-                fontSize: "1.5rem",
+                fontSize: "1.8rem",
                 fontWeight: 600,
                 color: "#2C2416",
                 mb: 0.5,
@@ -196,7 +197,7 @@ export default function LoginPage() {
             <Typography
               sx={{
                 fontFamily: '"Cormorant Garamond", serif',
-                fontSize: "0.9rem",
+                fontSize: "1.05rem",
                 color: "#7A6B55",
                 mb: 3,
               }}
@@ -266,7 +267,7 @@ export default function LoginPage() {
                   mb: 2,
                   borderRadius: 2,
                   fontFamily: '"Cormorant Garamond", serif',
-                  fontSize: "1rem",
+                  fontSize: "1.1rem",
                   fontWeight: 600,
                   letterSpacing: "0.05em",
                   textTransform: "none",
@@ -299,7 +300,7 @@ export default function LoginPage() {
                 borderColor: "#D4C9B5",
                 color: "#2C2416",
                 fontFamily: '"Cormorant Garamond", serif',
-                fontSize: "0.95rem",
+                fontSize: "1.05rem",
                 fontWeight: 500,
                 textTransform: "none",
                 "&:hover": { borderColor: "#8B6914", bgcolor: "rgba(139, 105, 20, 0.04)" },
@@ -311,7 +312,7 @@ export default function LoginPage() {
             <Typography
               sx={{
                 fontFamily: '"Cormorant Garamond", serif',
-                fontSize: "0.9rem",
+                fontSize: "1rem",
                 color: "#7A6B55",
                 textAlign: "center",
               }}
