@@ -22,22 +22,33 @@ export interface ContextInfo {
 
 export type SandboxStatus = "loading" | "ready" | "error";
 
-const API = "http://localhost:3001";
+const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
+
+export const MODEL_PRESETS = [
+  { id: "minimax",       name: "lite", label: "Lite — fast and lightweight" },
+  { id: "mimo",          name: "pro",  label: "Pro — thorough and reliable" },
+  { id: "claude-sonnet", name: "max",  label: "Max — expert with vision" },
+];
 
 export const MODEL_OPTIONS = [
   { id: "claude-sonnet", label: "Claude Sonnet 4.6" },
-  { id: "claude-haiku",  label: "Claude Haiku 4.5"  },
-  { id: "minimax",       label: "MiniMax M2.5"       },
-  { id: "kimi",          label: "Kimi K2.5"          },
+  { id: "claude-haiku",  label: "Claude Haiku 4.5" },
+  { id: "minimax",       label: "MiniMax M2.7" },
+  { id: "kimi",          label: "Kimi K2.5" },
+  { id: "mimo",          label: "MiMo V2 Pro" },
+  { id: "kat-coder",     label: "KAT-Coder Pro V2" },
+  { id: "qwen",          label: "Qwen 3.6 Plus Preview" },
 ];
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const supabase = createClient();
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
+  const openRouterKey = typeof window !== "undefined" ? localStorage.getItem("openrouter_key") : null;
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(openRouterKey ? { "X-OpenRouter-Key": openRouterKey } : {}),
   };
 }
 
@@ -111,6 +122,8 @@ export function useProject(projectId: string) {
   const [loading, setLoading] = useState(false);
   const [toolActivities, setToolActivities] = useState<ToolActivity[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [terminalUrl, setTerminalUrl] = useState<string | null>(null);
+  const [savedLayout, setSavedLayout] = useState<any>(null);
   const [iframeKey, setIframeKey] = useState(0);
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus>("loading");
   const [sandboxError, setSandboxError] = useState<string | null>(null);
@@ -127,7 +140,7 @@ export function useProject(projectId: string) {
     async function openProject() {
       try {
         const headers = await getAuthHeaders();
-        const res = await fetch(`${API}/api/projects/${projectId}/open`, {
+        const res = await fetch(`${API}/api/projects/${projectId}/connect`, {
           method: "POST",
           headers,
         });
@@ -135,7 +148,10 @@ export function useProject(projectId: string) {
         const data = await res.json();
         if (cancelled) return;
         if (data.previewUrl) setPreviewUrl(data.previewUrl);
+        if (data.terminalUrl) setTerminalUrl(data.terminalUrl);
         if (data.name) setProjectName(data.name);
+        console.log("[useProject] connect response layout:", data.layout ? "present" : "null");
+        if (data.layout) setSavedLayout(data.layout);
         if (data.messages?.length) {
           setMessages(dbMessagesToChat(data.messages));
         }
@@ -172,8 +188,8 @@ export function useProject(projectId: string) {
   const handleClearChat = useCallback(async () => {
     try {
       const headers = await getAuthHeaders();
-      await fetch(`${API}/api/projects/${projectId}/clear-chat`, {
-        method: "POST",
+      await fetch(`${API}/api/projects/${projectId}/history`, {
+        method: "DELETE",
         headers,
       });
       setMessages([]);
@@ -196,7 +212,7 @@ export function useProject(projectId: string) {
         setContextInfo({ tokens: data.tokens, limit: data.limit });
       }
       // Reload messages from server
-      const openRes = await fetch(`${API}/api/projects/${projectId}/open`, {
+      const openRes = await fetch(`${API}/api/projects/${projectId}/connect`, {
         method: "POST",
         headers,
       });
@@ -368,6 +384,89 @@ export function useProject(projectId: string) {
     }
   }, [input, loading, messages, projectId, selectedModel]);
 
+  const saveLayout = useCallback(async (layout: any) => {
+    try {
+      const headers = await getAuthHeaders();
+      console.log("[useProject] PUT layout to server...");
+      const res = await fetch(`${API}/api/projects/${projectId}/layout`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ layout }),
+      });
+      console.log("[useProject] PUT layout response:", res.status);
+    } catch (err: any) {
+      console.error("[useProject] save layout failed:", err.message);
+    }
+  }, [projectId]);
+
+  const [deploying, setDeploying] = useState(false);
+  const [deployUrl, setDeployUrl] = useState<string | null>(null);
+
+  const handleDeploy = useCallback(async () => {
+    setDeploying(true);
+    setMessages((prev) => [...prev, { role: "assistant", content: "Deploying to Vercel..." }]);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API}/api/projects/${projectId}/deploy`, {
+        method: "POST",
+        headers,
+      });
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === "result" && event.url) {
+              setDeployUrl(event.url);
+              setMessages((prev) => [
+                ...prev.slice(0, -1),
+                { role: "assistant", content: `Deployed! ${event.url}` },
+              ]);
+            } else if (event.type === "error") {
+              setMessages((prev) => [
+                ...prev.slice(0, -1),
+                { role: "assistant", content: `Deploy failed: ${event.message || event.content}` },
+              ]);
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (err: any) {
+      setMessages((prev) => [
+        ...prev.slice(0, -1),
+        { role: "assistant", content: `Deploy failed: ${err.message}` },
+      ]);
+    }
+    setDeploying(false);
+  }, [projectId]);
+
+  const handleUploadFile = useCallback(async (file: File) => {
+    const headers = await getAuthHeaders();
+    delete headers["Content-Type"];
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`${API}/api/projects/${projectId}/upload`, {
+        method: "POST",
+        headers,
+        body: formData,
+      });
+      const data = await res.json();
+      return data.path as string;
+    } catch {
+      return null;
+    }
+  }, [projectId]);
+
   return {
     messages,
     projectName,
@@ -376,6 +475,7 @@ export function useProject(projectId: string) {
     loading,
     toolActivities,
     previewUrl,
+    terminalUrl,
     iframeKey,
     setIframeKey,
     sandboxStatus,
@@ -384,11 +484,17 @@ export function useProject(projectId: string) {
     setSelectedModel,
     contextInfo,
     compacting,
+    deploying,
+    deployUrl,
+    savedLayout,
+    saveLayout,
     messagesEndRef,
     handleSend,
     handleAbort,
     handleClose,
     handleClearChat,
     handleCompact,
+    handleDeploy,
+    handleUploadFile,
   };
 }

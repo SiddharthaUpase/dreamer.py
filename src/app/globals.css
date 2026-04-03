@@ -139,3 +139,48 @@ body {
     @apply font-sans;
   }
 }
+
+/* react-resizable-panels separator styling */
+[data-resize-handle] {
+  position: relative;
+  flex-shrink: 0;
+}
+
+[data-resize-handle][data-orientation="horizontal"] {
+  width: 4px;
+  cursor: col-resize;
+}
+
+[data-resize-handle][data-orientation="vertical"] {
+  height: 4px;
+  cursor: row-resize;
+}
+
+[data-resize-handle]::after {
+  content: "";
+  position: absolute;
+  border-radius: 2px;
+  background: #ddd;
+  transition: background 0.15s;
+}
+
+[data-resize-handle][data-orientation="horizontal"]::after {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 24px;
+}
+
+[data-resize-handle][data-orientation="vertical"]::after {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  height: 2px;
+  width: 24px;
+}
+
+[data-resize-handle]:hover::after,
+[data-resize-handle][data-active]::after {
+  background: #6366f1;
+}

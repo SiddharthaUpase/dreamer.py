@@ -253,6 +253,7 @@ app.post("/api/projects", async (req: AuthRequest, res) => {
       r2_secret_access_key: null,
       r2_token_id: null,
       r2_public_domain: null,
+      layout: null,
     });
 
     // Provision resources (Neon DB + R2 bucket)
@@ -419,6 +420,21 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
       previewUrl = project.preview_url;
     }
 
+    // Get terminal URL (private preview on port 443, auth via BL API key)
+    let terminalUrl: string | null = null;
+    try {
+      const termPreview = await sandbox.previews.createIfNotExists({
+        metadata: { name: "terminal-preview" },
+        spec: { port: 443, public: false },
+      });
+      const baseUrl = termPreview.spec?.url;
+      if (baseUrl) {
+        terminalUrl = `${baseUrl}/terminal?token=${process.env.BL_API_KEY}`;
+      }
+    } catch (termErr: any) {
+      console.log(`[connect] terminal preview failed (non-critical):`, termErr.message);
+    }
+
     // Inject env vars
     const envData = {
       databaseUrl: project.database_url || undefined,
@@ -457,11 +473,109 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
       status: "ready",
       sandboxId: sandbox.metadata?.name || `proj-${pid}`,
       previewUrl,
+      terminalUrl,
       name: project.name,
       messages,
+      layout: project.layout || null,
     });
   } catch (err: any) {
     console.error("Failed to connect:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Layout Persistence =====
+
+app.get("/api/projects/:id/layout", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  console.log(`[layout] GET layout for project=${pid}`);
+  try {
+    const project = await getAccessibleProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    console.log(`[layout] returning layout: ${project.layout ? "found" : "null"}`);
+    res.json({ layout: project.layout || null });
+  } catch (err: any) {
+    console.error(`[layout] GET error:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/projects/:id/layout", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  console.log(`[layout] PUT layout for project=${pid}`, JSON.stringify(req.body?.layout).slice(0, 200));
+  try {
+    const project = await getAccessibleProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    await updateProject(pid, { layout: req.body.layout });
+    console.log(`[layout] saved successfully`);
+    res.json({ status: "saved" });
+  } catch (err: any) {
+    console.error(`[layout] PUT error:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Terminal Paste =====
+
+app.post("/api/projects/:id/terminal-paste", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  const { sessionId, text } = req.body;
+  if (!sessionId || !text) {
+    res.status(400).json({ error: "sessionId and text required" });
+    return;
+  }
+
+  try {
+    const project = await getAccessibleProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+    const sandbox = await getProjectSandbox(pid);
+
+    // Find the terminal preview to get the WebSocket host
+    let terminalHost: string | null = null;
+    try {
+      const preview = await sandbox.previews.get("terminal-preview");
+      const url = preview.spec?.url;
+      if (url) terminalHost = new URL(url).host;
+    } catch { /* ignore */ }
+
+    if (!terminalHost) {
+      res.status(400).json({ error: "No terminal preview found" });
+      return;
+    }
+
+    // Open WebSocket to the terminal session and send the text as input
+    const { default: WebSocket } = await import("ws");
+    const wsUrl = `wss://${terminalHost}/terminal/ws?cols=80&rows=24&sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(process.env.BL_API_KEY!)}`;
+
+    const ws = new WebSocket(wsUrl);
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        ws.close();
+        reject(new Error("WebSocket connection timeout"));
+      }, 5000);
+
+      ws.on("open", () => {
+        // Send the text as terminal input
+        ws.send(JSON.stringify({ type: "input", data: text }));
+        clearTimeout(timeout);
+        // Give it a moment to flush then close
+        setTimeout(() => {
+          ws.close();
+          resolve();
+        }, 200);
+      });
+
+      ws.on("error", (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    console.error("[terminal-paste] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

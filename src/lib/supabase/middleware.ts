@@ -28,21 +28,14 @@ export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allowed pages: home (dashboard), auth, login, static assets
-  const isAllowed =
-    pathname === "/" ||
-    pathname.startsWith("/auth/") ||
+  const isPublic =
     pathname === "/login" ||
+    pathname.startsWith("/auth/") ||
     pathname.startsWith("/_next/") ||
     pathname.startsWith("/favicon");
 
-  if (!isAllowed) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
-    return NextResponse.redirect(url);
-  }
-
-  // Protect dashboard — redirect to login if not authenticated
-  if (pathname === "/") {
+  // Protect all non-public pages — redirect to login if not authenticated
+  if (!isPublic) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       const url = request.nextUrl.clone();

@@ -26,10 +26,16 @@ interface Props {
 export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
   const [name, setName] = useState("");
   const [template, setTemplate] = useState("blank");
+  const [error, setError] = useState("");
 
   function handleCreate() {
-    if (!name.trim()) return;
-    onCreate(name.trim(), template);
+    const sanitized = name.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    if (!sanitized) {
+      setError("Name must contain letters or numbers");
+      return;
+    }
+    setError("");
+    onCreate(sanitized, template);
     setName("");
     setTemplate("blank");
     onClose();
@@ -77,6 +83,8 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           placeholder="My Portfolio"
           value={name}
           onChange={(e) => setName(e.target.value)}
+          error={!!error}
+          helperText={error || "Lowercase letters, numbers, and hyphens only"}
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}
           sx={{
             mt: 0.5,

@@ -23,15 +23,18 @@ interface Project {
   name: string;
   created_at: string;
   preview_url: string | null;
+  shared?: boolean;
 }
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const supabase = createClient();
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
+  const openRouterKey = typeof window !== "undefined" ? localStorage.getItem("openrouter_key") : null;
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(openRouterKey ? { "X-OpenRouter-Key": openRouterKey } : {}),
   };
 }
 
@@ -80,13 +83,33 @@ export default function Dashboard() {
     } catch { /* ignore */ }
   }
 
+  async function handleShare(id: string, email: string): Promise<string> {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${BACKEND_URL}/api/projects/${id}/share`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) return data.error || "Share failed";
+      if (data.status === "already_shared") return `${data.email} already has access`;
+      return "";
+    } catch (err: any) {
+      return err.message;
+    }
+  }
+
   async function handleCreate(name: string, template: string) {
+    const sanitized = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    if (!sanitized) return;
+    if (projects.some((p) => p.name === sanitized)) return;
     const id = `proj_${Date.now()}`;
     const headers = await getAuthHeaders();
     await fetch(`${BACKEND_URL}/api/projects`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ id, name, template }),
+      body: JSON.stringify({ id, name: sanitized, template }),
     });
     router.push(`/projects/${id}`);
   }
@@ -267,9 +290,10 @@ export default function Dashboard() {
               {projects.map((project) => (
                 <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={project.id}>
                   <ProjectCard
-                    project={{ ...project, lastEdited: timeAgo(project.created_at) }}
-                    onClick={() => {}}
+                    project={{ ...project, lastEdited: timeAgo(project.created_at), shared: project.shared }}
+                    onClick={() => router.push(`/projects/${project.id}`)}
                     onDelete={handleDelete}
+                    onShare={handleShare}
                   />
                 </Grid>
               ))}
