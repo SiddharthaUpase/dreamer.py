@@ -2,18 +2,31 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ThemeProvider } from "@mui/material/styles";
+import { ThemeProvider, createTheme } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import Box from "@mui/material/Box";
-import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import TextField from "@mui/material/TextField";
 import Button from "@mui/material/Button";
 import Divider from "@mui/material/Divider";
 import Alert from "@mui/material/Alert";
 import CircularProgress from "@mui/material/CircularProgress";
-import lightTheme from "@/theme-light";
 import { createClient } from "@/lib/supabase/client";
+
+// Renaissance-inspired warm theme
+const renaissanceTheme = createTheme({
+  palette: {
+    mode: "light",
+    primary: { main: "#8B6914", light: "#B8941F", dark: "#6B4F0E" },
+    background: { default: "#F5F0E8", paper: "#FFFDF7" },
+    text: { primary: "#2C2416", secondary: "#7A6B55" },
+    divider: "#D4C9B5",
+  },
+  typography: {
+    fontFamily: '"Cormorant Garamond", "Georgia", serif',
+  },
+  shape: { borderRadius: 8 },
+});
 
 type Mode = "login" | "signup";
 
@@ -62,102 +75,281 @@ export default function LoginPage() {
   };
 
   return (
-    <ThemeProvider theme={lightTheme}>
+    <ThemeProvider theme={renaissanceTheme}>
       <CssBaseline />
+      {/* Google Font */}
+      <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&display=swap" rel="stylesheet" />
+
       <Box
         sx={{
           minHeight: "100vh",
           display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          bgcolor: "background.default",
-          p: 2,
+          bgcolor: "#F5F0E8",
         }}
       >
-        <Paper
+        {/* Left side — Renaissance art panel */}
+        <Box
           sx={{
-            width: "100%",
-            maxWidth: 420,
-            p: 4,
-            borderRadius: 3,
-            boxShadow: "0 4px 24px rgb(0 0 0 / 0.08)",
+            flex: "0 0 55%",
+            display: { xs: "none", md: "flex" },
+            flexDirection: "column",
+            justifyContent: "flex-end",
+            position: "relative",
+            overflow: "hidden",
+            // Renaissance painting as background
+            backgroundImage: 'url("https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg/800px-Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg")',
+            backgroundSize: "cover",
+            backgroundPosition: "center",
           }}
         >
-          <Typography variant="h5" fontWeight={700} textAlign="center" mb={0.5}>
-            Agent VAS
-          </Typography>
-          <Typography variant="body2" color="text.secondary" textAlign="center" mb={3}>
-            {mode === "login" ? "Sign in to your account" : "Create a new account"}
-          </Typography>
-
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
-
-          <form onSubmit={handleSubmit}>
-            <TextField
-              fullWidth
-              label="Email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              size="small"
-              sx={{ mb: 2 }}
-            />
-            <TextField
-              fullWidth
-              label="Password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              size="small"
-              sx={{ mb: 2.5 }}
-              inputProps={{ minLength: 6 }}
-            />
-            <Button
-              type="submit"
-              fullWidth
-              variant="contained"
-              disabled={loading}
-              sx={{ py: 1.2, mb: 2 }}
-            >
-              {loading ? (
-                <CircularProgress size={22} color="inherit" />
-              ) : mode === "login" ? (
-                "Sign In"
-              ) : (
-                "Sign Up"
-              )}
-            </Button>
-          </form>
-
-          <Divider sx={{ my: 2 }}>or</Divider>
-
-          <Button
-            fullWidth
-            variant="outlined"
-            onClick={handleGoogle}
-            sx={{ py: 1.2, mb: 2.5 }}
-          >
-            Continue with Google
-          </Button>
-
-          <Typography variant="body2" color="text.secondary" textAlign="center">
-            {mode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-            <Box
-              component="span"
-              sx={{ color: "primary.main", cursor: "pointer", fontWeight: 600 }}
-              onClick={() => {
-                setMode(mode === "login" ? "signup" : "login");
-                setError(null);
-                setSuccess(null);
+          {/* Gradient overlay */}
+          <Box
+            sx={{
+              position: "absolute",
+              inset: 0,
+              background: "linear-gradient(to top, rgba(44, 36, 22, 0.85) 0%, rgba(44, 36, 22, 0.3) 40%, transparent 70%)",
+            }}
+          />
+          {/* Quote overlay */}
+          <Box sx={{ position: "relative", zIndex: 1, p: 6, pb: 8 }}>
+            <Typography
+              sx={{
+                fontFamily: '"Cormorant Garamond", serif',
+                fontSize: "2rem",
+                fontWeight: 300,
+                fontStyle: "italic",
+                color: "#F5F0E8",
+                lineHeight: 1.4,
+                maxWidth: 480,
+                mb: 2,
               }}
             >
-              {mode === "login" ? "Sign up" : "Sign in"}
+              &ldquo;Every block of stone has a statue inside it, and it is the task of the sculptor to discover it.&rdquo;
+            </Typography>
+            <Typography
+              sx={{
+                fontFamily: '"Cormorant Garamond", serif',
+                fontSize: "1rem",
+                color: "rgba(245, 240, 232, 0.7)",
+                fontWeight: 500,
+                letterSpacing: "0.1em",
+              }}
+            >
+              &mdash; MICHELANGELO
+            </Typography>
+          </Box>
+        </Box>
+
+        {/* Right side — Login form */}
+        <Box
+          sx={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            px: { xs: 3, sm: 6 },
+            py: 4,
+          }}
+        >
+          <Box sx={{ width: "100%", maxWidth: 380 }}>
+            {/* Logo */}
+            <Box sx={{ mb: 5 }}>
+              <Typography
+                sx={{
+                  fontFamily: '"Cormorant Garamond", serif',
+                  fontSize: "2.2rem",
+                  fontWeight: 700,
+                  color: "#2C2416",
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1,
+                }}
+              >
+                Dreamer
+              </Typography>
+              <Typography
+                sx={{
+                  fontFamily: '"Cormorant Garamond", serif',
+                  fontSize: "0.95rem",
+                  color: "#7A6B55",
+                  mt: 0.75,
+                  fontStyle: "italic",
+                  fontWeight: 400,
+                }}
+              >
+                Where ideas become reality
+              </Typography>
             </Box>
+
+            {/* Heading */}
+            <Typography
+              sx={{
+                fontFamily: '"Cormorant Garamond", serif',
+                fontSize: "1.5rem",
+                fontWeight: 600,
+                color: "#2C2416",
+                mb: 0.5,
+              }}
+            >
+              {mode === "login" ? "Welcome back" : "Begin your journey"}
+            </Typography>
+            <Typography
+              sx={{
+                fontFamily: '"Cormorant Garamond", serif',
+                fontSize: "0.9rem",
+                color: "#7A6B55",
+                mb: 3,
+              }}
+            >
+              {mode === "login"
+                ? "Sign in to continue crafting your vision"
+                : "Create an account to start building"
+              }
+            </Typography>
+
+            {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
+            {success && <Alert severity="success" sx={{ mb: 2, borderRadius: 2 }}>{success}</Alert>}
+
+            <form onSubmit={handleSubmit}>
+              <TextField
+                fullWidth
+                label="Email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                size="small"
+                sx={{
+                  mb: 2,
+                  "& .MuiOutlinedInput-root": {
+                    borderRadius: 2,
+                    bgcolor: "#FFFDF7",
+                    fontFamily: '"Inter", sans-serif',
+                    fontSize: "0.9rem",
+                  },
+                  "& .MuiInputLabel-root": {
+                    fontFamily: '"Inter", sans-serif',
+                    fontSize: "0.85rem",
+                  },
+                }}
+              />
+              <TextField
+                fullWidth
+                label="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                size="small"
+                sx={{
+                  mb: 3,
+                  "& .MuiOutlinedInput-root": {
+                    borderRadius: 2,
+                    bgcolor: "#FFFDF7",
+                    fontFamily: '"Inter", sans-serif',
+                    fontSize: "0.9rem",
+                  },
+                  "& .MuiInputLabel-root": {
+                    fontFamily: '"Inter", sans-serif',
+                    fontSize: "0.85rem",
+                  },
+                }}
+                inputProps={{ minLength: 6 }}
+              />
+              <Button
+                type="submit"
+                fullWidth
+                variant="contained"
+                disabled={loading}
+                sx={{
+                  py: 1.3,
+                  mb: 2,
+                  borderRadius: 2,
+                  fontFamily: '"Cormorant Garamond", serif',
+                  fontSize: "1rem",
+                  fontWeight: 600,
+                  letterSpacing: "0.05em",
+                  textTransform: "none",
+                  bgcolor: "#2C2416",
+                  "&:hover": { bgcolor: "#3D3220" },
+                }}
+              >
+                {loading ? (
+                  <CircularProgress size={22} color="inherit" />
+                ) : mode === "login" ? (
+                  "Sign In"
+                ) : (
+                  "Create Account"
+                )}
+              </Button>
+            </form>
+
+            <Divider sx={{ my: 2.5, color: "#B5A898", fontSize: "0.8rem", fontFamily: '"Cormorant Garamond", serif' }}>
+              or
+            </Divider>
+
+            <Button
+              fullWidth
+              variant="outlined"
+              onClick={handleGoogle}
+              sx={{
+                py: 1.2,
+                mb: 3,
+                borderRadius: 2,
+                borderColor: "#D4C9B5",
+                color: "#2C2416",
+                fontFamily: '"Cormorant Garamond", serif',
+                fontSize: "0.95rem",
+                fontWeight: 500,
+                textTransform: "none",
+                "&:hover": { borderColor: "#8B6914", bgcolor: "rgba(139, 105, 20, 0.04)" },
+              }}
+            >
+              Continue with Google
+            </Button>
+
+            <Typography
+              sx={{
+                fontFamily: '"Cormorant Garamond", serif',
+                fontSize: "0.9rem",
+                color: "#7A6B55",
+                textAlign: "center",
+              }}
+            >
+              {mode === "login" ? "New to Dreamer?" : "Already have an account?"}{" "}
+              <Box
+                component="span"
+                sx={{
+                  color: "#8B6914",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  "&:hover": { textDecoration: "underline" },
+                }}
+                onClick={() => {
+                  setMode(mode === "login" ? "signup" : "login");
+                  setError(null);
+                  setSuccess(null);
+                }}
+              >
+                {mode === "login" ? "Begin your journey" : "Welcome back"}
+              </Box>
+            </Typography>
+          </Box>
+
+          {/* Footer */}
+          <Typography
+            sx={{
+              position: "absolute",
+              bottom: 24,
+              fontFamily: '"Cormorant Garamond", serif',
+              fontSize: "0.75rem",
+              color: "#B5A898",
+              fontStyle: "italic",
+            }}
+          >
+            Built for dreamers, by dreamers
           </Typography>
-        </Paper>
+        </Box>
       </Box>
     </ThemeProvider>
   );
