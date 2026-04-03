@@ -22,6 +22,12 @@ export interface ContextInfo {
 
 export type SandboxStatus = "loading" | "ready" | "error";
 
+export interface UploadedFile {
+  fileName: string;
+  remotePath: string;
+  size: string;
+}
+
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
 
 export const MODEL_PRESETS = [
@@ -131,8 +137,62 @@ export function useProject(projectId: string) {
   const [sandboxError, setSandboxError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState("claude-sonnet");
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
+  const [pendingUploads, setPendingUploads] = useState<UploadedFile[]>([]);
+  const [uploading, setUploading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Share project with another user by email
+  const handleShare = useCallback(async (email: string): Promise<{ status: string; error?: string }> => {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API}/api/projects/${projectId}/share`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { status: "error", error: data.error || `Share failed (${res.status})` };
+      }
+      return { status: data.status };
+    } catch (err: any) {
+      return { status: "error", error: err.message };
+    }
+  }, [projectId]);
+
+  // Upload files to sandbox
+  const handleUploadFiles = useCallback(async (files: FileList | File[]) => {
+    setUploading(true);
+    const headers = await getAuthHeaders();
+    const results: UploadedFile[] = [];
+    for (const file of Array.from(files)) {
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch(`${API}/api/projects/${projectId}/upload`, {
+          method: "POST",
+          headers: { ...(headers.Authorization ? { Authorization: headers.Authorization } : {}) },
+          body: formData,
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const size = file.size < 1024
+          ? `${file.size}B`
+          : file.size < 1048576
+            ? `${(file.size / 1024).toFixed(1)}KB`
+            : `${(file.size / 1048576).toFixed(1)}MB`;
+        results.push({ fileName: file.name, remotePath: data.path, size });
+      } catch { /* skip failed */ }
+    }
+    setPendingUploads((prev) => [...prev, ...results]);
+    setUploading(false);
+    return results;
+  }, [projectId]);
+
+  const removePendingUpload = useCallback((index: number) => {
+    setPendingUploads((prev) => prev.filter((_, i) => i !== index));
+  }, []);
 
   // Wake sandbox on mount
   useEffect(() => {
@@ -246,7 +306,16 @@ export function useProject(projectId: string) {
     const text = input.trim();
     if (!text || loading) return;
 
+    // Build the message sent to the agent (includes upload paths)
+    let agentMessage = text;
+    if (pendingUploads.length > 0) {
+      const uploads = pendingUploads.map((u) => `[uploaded file: ${u.remotePath}]`).join("\n");
+      agentMessage = uploads + "\n" + text;
+      setPendingUploads([]);
+    }
+
     setInput("");
+    // Show the clean text to the user (without upload prefixes)
     const nextMessages: ChatMessage[] = [...messages, { role: "user", content: text }];
     setMessages(nextMessages);
     setLoading(true);
@@ -263,7 +332,7 @@ export function useProject(projectId: string) {
       const res = await fetch(`${API}/api/projects/${projectId}/chat`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ message: text, model: selectedModel }),
+        body: JSON.stringify({ message: agentMessage, model: selectedModel }),
         signal: controller.signal,
       });
 
@@ -384,7 +453,7 @@ export function useProject(projectId: string) {
       setToolActivities([]);
       setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     }
-  }, [input, loading, messages, projectId, selectedModel]);
+  }, [input, loading, messages, pendingUploads, projectId, selectedModel]);
 
   const saveLayout = useCallback(async (layout: any) => {
     try {
@@ -491,6 +560,8 @@ export function useProject(projectId: string) {
     savedLayout,
     saveLayout,
     messagesEndRef,
+    pendingUploads,
+    uploading,
     handleSend,
     handleAbort,
     handleClose,
@@ -498,5 +569,8 @@ export function useProject(projectId: string) {
     handleCompact,
     handleDeploy,
     handleUploadFile,
+    handleShare,
+    handleUploadFiles,
+    removePendingUpload,
   };
 }
