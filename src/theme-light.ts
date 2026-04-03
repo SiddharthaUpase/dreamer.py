@@ -36,6 +36,14 @@ const lightTheme = createTheme({
   },
   typography: {
     fontFamily: '"Cormorant Garamond", "Georgia", serif',
+    fontSize: 16,
+    h6: { fontSize: "1.4rem", fontWeight: 700 },
+    subtitle1: { fontSize: "1.1rem", fontWeight: 600 },
+    body1: { fontSize: "1.05rem", fontWeight: 500 },
+    body2: { fontSize: "0.95rem", fontWeight: 500 },
+    caption: { fontSize: "0.85rem", fontWeight: 500 },
+    button: { fontSize: "1rem", fontWeight: 600 },
+    overline: { fontSize: "0.8rem", fontWeight: 600 },
   },
   components: {
     MuiPaper: {
