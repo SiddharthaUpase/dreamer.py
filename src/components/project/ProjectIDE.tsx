@@ -28,7 +28,7 @@ import LanguageIcon from "@mui/icons-material/Language";
 import CompressIcon from "@mui/icons-material/Compress";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { useRouter } from "next/navigation";
-import { useProject, MODEL_OPTIONS } from "@/hooks/useProject";
+import { useProject, MODEL_PRESETS, CUSTOM_MODELS } from "@/hooks/useProject";
 import type { ToolActivity } from "@/hooks/useProject";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -813,7 +813,12 @@ function ContextModelBar({
   onCompact: () => void;
   onClear: () => void;
 }) {
+  const [showCustom, setShowCustom] = useState(false);
   const ratio = contextInfo ? contextInfo.tokens / contextInfo.limit : 0;
+
+  // Check if current model matches a preset
+  const activePreset = MODEL_PRESETS.find((p) => p.id === selectedModel);
+
   return (
     <Box sx={{ px: 3, pb: 1.5, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -860,24 +865,88 @@ function ContextModelBar({
           </IconButton>
         </Tooltip>
       </Box>
-      <Select
-        size="small"
-        value={selectedModel}
-        onChange={(e) => setSelectedModel(e.target.value)}
-        disabled={loading}
-        sx={{
-          fontSize: "0.7rem",
-          height: 24,
-          "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" },
-          "& .MuiSelect-select": { py: 0, px: 1 },
-        }}
-      >
-        {MODEL_OPTIONS.map((m) => (
-          <MenuItem key={m.id} value={m.id} sx={{ fontSize: "0.75rem" }}>
-            {m.label}
-          </MenuItem>
-        ))}
-      </Select>
+
+      {/* Mode selector: lite / pro / max presets + custom dropdown */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+        {/* Preset toggle group */}
+        <Box
+          sx={{
+            display: "flex",
+            bgcolor: "#F4F4F5",
+            borderRadius: 1.5,
+            p: 0.3,
+            gap: 0.25,
+          }}
+        >
+          {MODEL_PRESETS.map((preset) => {
+            const isActive = selectedModel === preset.id && !showCustom;
+            return (
+              <Tooltip key={preset.id} title={preset.desc}>
+                <Box
+                  onClick={() => {
+                    if (!loading) {
+                      setSelectedModel(preset.id);
+                      setShowCustom(false);
+                    }
+                  }}
+                  sx={{
+                    px: 1.25,
+                    py: 0.35,
+                    borderRadius: 1,
+                    cursor: loading ? "default" : "pointer",
+                    fontSize: "0.68rem",
+                    fontWeight: 600,
+                    letterSpacing: 0.3,
+                    textTransform: "uppercase",
+                    color: isActive ? "primary.main" : "text.secondary",
+                    bgcolor: isActive ? "background.paper" : "transparent",
+                    boxShadow: isActive ? "0 1px 3px rgb(0 0 0 / 0.1)" : "none",
+                    transition: "all 0.12s",
+                    userSelect: "none",
+                    "&:hover": loading ? {} : { color: isActive ? "primary.main" : "text.primary" },
+                  }}
+                >
+                  {preset.name}
+                </Box>
+              </Tooltip>
+            );
+          })}
+        </Box>
+
+        {/* Custom model dropdown */}
+        <Select
+          size="small"
+          value={showCustom || !activePreset ? selectedModel : ""}
+          displayEmpty
+          onChange={(e) => {
+            const val = e.target.value;
+            if (val) {
+              setSelectedModel(val);
+              setShowCustom(true);
+            }
+          }}
+          disabled={loading}
+          renderValue={(value) => {
+            if (!value) return <span style={{ opacity: 0.5 }}>custom</span>;
+            const m = CUSTOM_MODELS.find((c) => c.id === value);
+            return m ? m.label : value;
+          }}
+          sx={{
+            fontSize: "0.68rem",
+            height: 24,
+            minWidth: 70,
+            "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" },
+            "& .MuiSelect-select": { py: 0, px: 1 },
+          }}
+        >
+          {CUSTOM_MODELS.map((m) => (
+            <MenuItem key={m.id} value={m.id} sx={{ fontSize: "0.72rem", display: "flex", justifyContent: "space-between", gap: 2 }}>
+              <span>{m.label}</span>
+              <Typography component="span" sx={{ color: "text.secondary", fontSize: "0.62rem" }}>{m.desc}</Typography>
+            </MenuItem>
+          ))}
+        </Select>
+      </Box>
     </Box>
   );
 }

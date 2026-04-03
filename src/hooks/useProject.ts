@@ -24,12 +24,23 @@ export type SandboxStatus = "loading" | "ready" | "error";
 
 const API = "http://localhost:3001";
 
-export const MODEL_OPTIONS = [
-  { id: "claude-sonnet", label: "Claude Sonnet 4.6" },
-  { id: "claude-haiku",  label: "Claude Haiku 4.5"  },
-  { id: "minimax",       label: "MiniMax M2.5"       },
-  { id: "kimi",          label: "Kimi K2.5"          },
+export const MODEL_PRESETS = [
+  { id: "minimax",       name: "lite", desc: "fast and lightweight" },
+  { id: "mimo",          name: "pro",  desc: "thorough and reliable" },
+  { id: "claude-sonnet", name: "max",  desc: "expert with vision" },
+] as const;
+
+export const CUSTOM_MODELS = [
+  { id: "claude-sonnet", label: "Claude Sonnet 4.6",  desc: "vision, expert reasoning" },
+  { id: "claude-haiku",  label: "Claude Haiku 4.5",   desc: "fast, vision support" },
+  { id: "minimax",       label: "MiniMax M2.7",       desc: "lightweight, fast tasks" },
+  { id: "kimi",          label: "Kimi K2.5",          desc: "long context, reasoning" },
+  { id: "mimo",          label: "MiMo V2 Pro",        desc: "thorough, code-focused" },
+  { id: "kat-coder",     label: "KAT-Coder Pro V2",   desc: "enterprise coding, SaaS" },
 ];
+
+// Kept for backwards compat — flat list used by legacy callers
+export const MODEL_OPTIONS = CUSTOM_MODELS;
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const supabase = createClient();
