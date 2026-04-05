@@ -11,6 +11,7 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
 import Chip from "@mui/material/Chip";
+import CircularProgress from "@mui/material/CircularProgress";
 import CloseIcon from "@mui/icons-material/Close";
 import LanguageRoundedIcon from "@mui/icons-material/LanguageRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
@@ -35,28 +36,32 @@ const TEMPLATES = [
 interface Props {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, template: string) => void;
+  onCreate: (name: string, template: string) => Promise<void> | void;
 }
 
 export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
   const [name, setName] = useState("");
   const [template, setTemplate] = useState("nextjs");
   const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
 
-  function handleCreate() {
+  async function handleCreate() {
     const sanitized = name.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
     if (!sanitized) {
       setError("Name must contain letters or numbers");
       return;
     }
     setError("");
-    onCreate(sanitized, template);
-    setName("");
-    setTemplate("nextjs");
-    onClose();
+    setCreating(true);
+    try {
+      await onCreate(sanitized, template);
+    } catch {
+      setCreating(false);
+    }
   }
 
   function handleClose() {
+    if (creating) return;
     setName("");
     setTemplate("nextjs");
     setError("");
@@ -107,7 +112,8 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           onChange={(e) => setName(e.target.value)}
           error={!!error}
           helperText={error || "Lowercase letters, numbers, and hyphens only"}
-          onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+          disabled={creating}
+          onKeyDown={(e) => e.key === "Enter" && !creating && handleCreate()}
           sx={{
             mt: 0.5,
             mb: 2.5,
@@ -127,7 +133,7 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
             return (
               <Box
                 key={t.id}
-                onClick={() => setTemplate(t.id)}
+                onClick={() => !creating && setTemplate(t.id)}
                 sx={{
                   display: "flex",
                   alignItems: "flex-start",
@@ -208,11 +214,18 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           fullWidth
           variant="contained"
           disableElevation
-          disabled={!name.trim()}
+          disabled={!name.trim() || creating}
           onClick={handleCreate}
           sx={{ borderRadius: 2, py: 1, fontWeight: 600 }}
         >
-          Create Project
+          {creating ? (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+              <CircularProgress size={16} sx={{ color: "inherit" }} />
+              Setting up project...
+            </Box>
+          ) : (
+            "Create Project"
+          )}
         </Button>
       </DialogActions>
     </Dialog>
