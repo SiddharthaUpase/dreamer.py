@@ -51,21 +51,31 @@ async function processJob(data: AgentJobData): Promise<void> {
     }
   });
 
-  // Event emitter — writes to agent_events table
-  const sendEvent = async (event: any) => {
+  // Event emitter — writes to agent_events table.
+  // Serialized via promise chain: the agent calls sendEvent synchronously
+  // (without await) for token events, so without serialization, parallel
+  // inserts race over the network and Postgres assigns IDs in arrival order
+  // rather than emission order, causing garbled text on the frontend.
+  let insertChain: Promise<void> = Promise.resolve();
+  const sendEvent = (event: any): void => {
     if (abortController.signal.aborted) return;
-    try {
-      await insertAgentEvent(jobId, event);
-    } catch (err: any) {
-      console.error(`[worker] failed to insert event:`, err.message);
-    }
+    insertChain = insertChain.then(async () => {
+      try {
+        await insertAgentEvent(jobId, event);
+      } catch (err: any) {
+        console.error(`[worker] failed to insert event:`, err.message);
+      }
+    });
   };
+  // Wait for all queued inserts to finish before marking job complete
+  const drainEvents = () => insertChain;
 
   try {
     // Verify access
     const hasAccess = await checkUserAccess(userId);
     if (!hasAccess) {
-      await sendEvent({ type: "error", content: "No access. Please redeem a starter code." });
+      sendEvent({ type: "error", content: "No access. Please redeem a starter code." });
+      await drainEvents();
       await updateJobStatus(jobId, "failed", "No access");
       return;
     }
@@ -73,7 +83,8 @@ async function processJob(data: AgentJobData): Promise<void> {
     // Load project
     const project = await getProject(projectId);
     if (!project) {
-      await sendEvent({ type: "error", content: "Project not found" });
+      sendEvent({ type: "error", content: "Project not found" });
+      await drainEvents();
       await updateJobStatus(jobId, "failed", "Project not found");
       return;
     }
@@ -123,7 +134,7 @@ async function processJob(data: AgentJobData): Promise<void> {
           await deleteProjectMessages(projectId, userId);
           const dbRows = (result as any).compactedHistory.map((m: any) => langChainToDbRow(m, projectId, userId));
           await saveMessages(dbRows);
-          await sendEvent({ type: "compacted", before: history.length, after: dbRows.length });
+          sendEvent({ type: "compacted", before: history.length, after: dbRows.length });
         } else {
           // Skip the user's HumanMessage — it was already saved by the API
           // when the job was created, so we don't re-save it here.
@@ -140,20 +151,23 @@ async function processJob(data: AgentJobData): Promise<void> {
     // Collect output files
     const files = await collectOutputFiles(sandbox);
     if (files.length > 0) {
-      await sendEvent({ type: "outputs", files });
+      sendEvent({ type: "outputs", files });
     }
 
-    // Mark completed (or aborted if signal fired)
+    // Drain all pending event inserts before flipping status
+    await drainEvents();
     const finalStatus: JobStatus = abortController.signal.aborted ? "aborted" : "completed";
     await updateJobStatus(jobId, finalStatus);
   } catch (err: any) {
     if (abortController.signal.aborted || err.name === "AbortError") {
       console.log(`[worker] job ${jobId} aborted`);
-      await sendEvent({ type: "aborted" });
+      sendEvent({ type: "aborted" });
+      await drainEvents();
       await updateJobStatus(jobId, "aborted");
     } else {
       console.error(`\x1b[31m[worker]\x1b[0m job ${jobId} failed:`, err.message);
-      await sendEvent({ type: "error", content: err.message });
+      sendEvent({ type: "error", content: err.message });
+      await drainEvents();
       await updateJobStatus(jobId, "failed", err.message);
     }
   } finally {
