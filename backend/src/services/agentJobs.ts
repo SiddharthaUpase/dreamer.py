@@ -81,7 +81,13 @@ export async function insertAgentEvent(jobId: string, event: any): Promise<void>
 /**
  * Find the currently-active (queued or running) job for a project+worktree.
  * Used on frontend reconnect to resume subscribing to an in-flight agent.
+ *
+ * If a job has been "running" for longer than STALE_THRESHOLD_MS without an
+ * updated_at bump, it means the worker crashed — mark it as failed so the
+ * UI doesn't attach to a dead job forever.
  */
+const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function getActiveJob(
   projectId: string,
   worktreeId: string,
@@ -96,5 +102,17 @@ export async function getActiveJob(
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  return (data as AgentJob) || null;
+
+  if (!data) return null;
+
+  const job = data as AgentJob;
+  const age = Date.now() - new Date(job.updated_at).getTime();
+
+  if (age > STALE_THRESHOLD_MS) {
+    console.log(`[agent-jobs] stale job ${job.id} (${Math.round(age / 1000)}s old) — marking as failed`);
+    await updateJobStatus(job.id, "failed", "Worker crashed or timed out");
+    return null;
+  }
+
+  return job;
 }
