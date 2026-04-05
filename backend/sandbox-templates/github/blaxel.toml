@@ -1,0 +1,10 @@
+type = "sandbox"
+name = "github-template"
+
+[runtime]
+memory = 4096
+
+[[runtime.ports]]
+name = "app-dev"
+target = 3000
+protocol = "tcp"
