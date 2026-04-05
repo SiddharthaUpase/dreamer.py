@@ -73,14 +73,19 @@ export default function Dashboard() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [activeProjectIds, setActiveProjectIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
+    const supabase = createClient();
+    let channel: any = null;
+    let userId: string | null = null;
+
     async function load() {
-      const supabase = createClient();
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (user?.email) setUserEmail(user.email);
+      userId = user?.id || null;
 
       try {
         const headers = await getAuthHeaders();
@@ -92,8 +97,60 @@ export default function Dashboard() {
       } finally {
         setLoading(false);
       }
+
+      if (!userId) return;
+
+      // Initial query: projects with active (queued/running) agent jobs
+      try {
+        const { data: activeJobs } = await supabase
+          .from("agent_jobs")
+          .select("project_id")
+          .eq("user_id", userId)
+          .in("status", ["queued", "running"]);
+        if (activeJobs) {
+          setActiveProjectIds(new Set((activeJobs as any[]).map((j) => j.project_id)));
+        }
+      } catch { /* ignore */ }
+
+      // Live subscription: any change to this user's agent_jobs
+      channel = supabase
+        .channel("dashboard-agent-jobs")
+        .on(
+          "postgres_changes" as any,
+          {
+            event: "*",
+            schema: "public",
+            table: "agent_jobs",
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload: any) => {
+            const row = payload.new || payload.old;
+            if (!row?.project_id) return;
+            const status = payload.new?.status;
+            const isActive = status === "queued" || status === "running";
+            setActiveProjectIds((prev) => {
+              const next = new Set(prev);
+              if (isActive) {
+                next.add(row.project_id);
+              } else {
+                // completed | failed | aborted | DELETE event
+                next.delete(row.project_id);
+              }
+              return next;
+            });
+          }
+        )
+        .subscribe();
     }
+
     load();
+
+    return () => {
+      if (channel) {
+        const supabase = createClient();
+        supabase.removeChannel(channel);
+      }
+    };
   }, []);
 
   async function handleDelete(id: string) {
@@ -582,6 +639,7 @@ export default function Dashboard() {
                     onClick={() => router.push(`/projects/${project.id}`)}
                     onDelete={handleDelete}
                     onShare={handleShare}
+                    isAgentRunning={activeProjectIds.has(project.id)}
                   />
                 </Grid>
               ))}

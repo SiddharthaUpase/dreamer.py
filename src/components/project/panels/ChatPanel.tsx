@@ -239,15 +239,14 @@ export default function ChatPanel({
                 <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.85rem" }}>Thinking...</Typography>
               </Box>
             )}
+            {/* Agent running indicator — sits inline below the latest assistant message */}
+            {loading && messages[messages.length - 1]?.role === "assistant" && <AgentRunningIndicator />}
             {loading && <Box sx={{ minHeight: "30vh" }} />}
             <div ref={messagesEndRef} />
           </Box>
 
-          {/* Agent running indicator */}
-          {loading && <AgentRunningIndicator />}
-
           {/* Input at bottom */}
-          <Box sx={{ px: 2, pt: 1, pb: 1, borderTop: loading ? "none" : "1px solid", borderColor: "divider" }}>
+          <Box sx={{ px: 2, pt: 1, pb: 1, borderTop: "1px solid", borderColor: "divider" }}>
             <ChatInput
               input={input} setInput={setInput} loading={loading} uploadingFiles={uploadingFiles}
               stagedFiles={stagedFiles} filePreviews={filePreviews}
@@ -368,10 +367,9 @@ function AgentRunningIndicator() {
   return (
     <Box
       sx={{
-        px: 2, py: 0.6,
-        borderTop: "1px solid", borderColor: "divider",
+        mt: 0.75, mb: 0.5,
         display: "flex", alignItems: "center", gap: 0.75,
-        bgcolor: "rgba(139, 105, 20, 0.04)",
+        pl: 0.5,
       }}
     >
       <Box

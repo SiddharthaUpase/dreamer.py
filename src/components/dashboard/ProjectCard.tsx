@@ -27,6 +27,7 @@ interface Props {
   onClick: () => void;
   onDelete: (id: string) => void;
   onShare?: (id: string, email: string) => Promise<string>;
+  isAgentRunning?: boolean;
 }
 
 const GRADIENTS = [
@@ -48,7 +49,7 @@ function getGradient(name: string): string {
   return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
 }
 
-export default function ProjectCard({ project, onClick, onDelete, onShare }: Props) {
+export default function ProjectCard({ project, onClick, onDelete, onShare, isAgentRunning }: Props) {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
   return (
@@ -108,6 +109,7 @@ export default function ProjectCard({ project, onClick, onDelete, onShare }: Pro
         >
           {project.name.charAt(0)}
         </Typography>
+
       </Box>
 
       {/* Footer */}
@@ -121,19 +123,22 @@ export default function ProjectCard({ project, onClick, onDelete, onShare }: Pro
         }}
       >
         <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography
-            variant="body2"
-            fontWeight={600}
-            noWrap
-            sx={{ color: "text.primary", lineHeight: 1.4, fontSize: "0.85rem" }}
-          >
-            {project.name}
-          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+            <Typography
+              variant="body2"
+              fontWeight={600}
+              noWrap
+              sx={{ color: "text.primary", lineHeight: 1.4, fontSize: "0.85rem", minWidth: 0 }}
+            >
+              {project.name}
+            </Typography>
+            {isAgentRunning && <AgentEqualizer />}
+          </Box>
           <Typography
             variant="caption"
-            sx={{ color: "text.secondary", fontSize: "0.7rem" }}
+            sx={{ color: isAgentRunning ? "#16A34A" : "text.secondary", fontSize: "0.7rem", fontWeight: isAgentRunning ? 600 : 400 }}
           >
-            Edited {project.lastEdited}
+            {isAgentRunning ? "Agent working..." : `Edited ${project.lastEdited}`}
           </Typography>
           {project.shared && (
             <Chip label="shared" size="small" sx={{ height: 18, fontSize: "0.6rem", bgcolor: "rgba(99,102,241,0.15)", color: "primary.main" }} />
@@ -228,6 +233,43 @@ export default function ProjectCard({ project, onClick, onDelete, onShare }: Pro
           </MenuItem>
         </Menu>
       </Box>
+    </Box>
+  );
+}
+
+/**
+ * Animated progress pill — a small rounded track with a highlight that
+ * slides across, conveying continuous work without looking like music.
+ */
+function AgentEqualizer() {
+  return (
+    <Box
+      sx={{
+        position: "relative",
+        width: 28,
+        height: 4,
+        borderRadius: 2,
+        bgcolor: "rgba(22, 163, 74, 0.18)",
+        overflow: "hidden",
+        flexShrink: 0,
+        "@keyframes agentSlide": {
+          "0%": { left: "-40%" },
+          "100%": { left: "100%" },
+        },
+      }}
+    >
+      <Box
+        sx={{
+          position: "absolute",
+          top: 0,
+          left: "-40%",
+          width: "40%",
+          height: "100%",
+          borderRadius: 2,
+          background: "linear-gradient(90deg, transparent 0%, #16A34A 50%, transparent 100%)",
+          animation: "agentSlide 1.3s ease-in-out infinite",
+        }}
+      />
     </Box>
   );
 }

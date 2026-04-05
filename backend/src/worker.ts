@@ -125,7 +125,11 @@ async function processJob(data: AgentJobData): Promise<void> {
           await saveMessages(dbRows);
           await sendEvent({ type: "compacted", before: history.length, after: dbRows.length });
         } else {
-          const dbRows = result.newMessages.map((m) => langChainToDbRow(m, projectId, userId));
+          // Skip the user's HumanMessage — it was already saved by the API
+          // when the job was created, so we don't re-save it here.
+          const dbRows = result.newMessages
+            .map((m) => langChainToDbRow(m, projectId, userId))
+            .filter((row) => row.role !== "human");
           await saveMessages(dbRows);
         }
       } catch (err: any) {

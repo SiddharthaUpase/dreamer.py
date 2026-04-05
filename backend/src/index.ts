@@ -672,6 +672,21 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
       model: model || "mimo",
     });
 
+    // Persist the user message immediately so it survives a refresh mid-stream.
+    // The worker will NOT re-save this message when the agent completes.
+    await saveMessages([
+      {
+        project_id: pid,
+        user_id: req.userId!,
+        role: "human",
+        content: message,
+        tool_calls: null,
+        tool_call_id: null,
+        name: null,
+        created_at: new Date().toISOString(),
+      } as any,
+    ]);
+
     await agentQueue.add("run-agent", {
       jobId: job.id,
       projectId: pid,

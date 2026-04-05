@@ -22,8 +22,6 @@ import LayoutRenderer from "./layout/LayoutRenderer";
 import { DragProvider } from "./layout/DragContext";
 import { layoutReducer, DEFAULT_LAYOUT, countPanels } from "./layout/layoutReducer";
 import type { PanelType } from "./layout/types";
-import WorktreeSidebar from "./WorktreeSidebar";
-import type { Worktree } from "./WorktreeSidebar";
 
 interface Props {
   projectId: string;
@@ -43,21 +41,6 @@ export default function ProjectIDE({ projectId }: Props) {
     handleUploadFiles,
     deploying, terminalUrl, savedLayout, saveLayout,
   } = useProject(projectId);
-
-  const [worktrees, setWorktrees] = useState<Worktree[]>([
-    { id: "main", name: "Main" },
-  ]);
-  const [activeWorktree, setActiveWorktree] = useState("main");
-
-  const handleCreateWorktree = () => {
-    const count = worktrees.length;
-    const newWt: Worktree = {
-      id: `wt-${Date.now()}`,
-      name: `Branch ${count}`,
-    };
-    setWorktrees((prev) => [...prev, newWt]);
-    setActiveWorktree(newWt.id);
-  };
 
   const [layout, dispatch] = useReducer(layoutReducer, DEFAULT_LAYOUT);
   const layoutInitialized = useRef(false);
@@ -218,23 +201,15 @@ export default function ProjectIDE({ projectId }: Props) {
         </Tooltip>
       </Box>
 
-      {/* Layout area with worktree sidebar */}
+      {/* Layout area */}
       <DragProvider>
-        <Box sx={{ flex: 1, overflow: "hidden", display: "flex" }}>
-          <WorktreeSidebar
-            worktrees={worktrees}
-            activeId={activeWorktree}
-            onSelect={setActiveWorktree}
-            onCreate={handleCreateWorktree}
+        <Box sx={{ flex: 1, overflow: "hidden" }}>
+          <LayoutRenderer
+            node={layout.root}
+            dispatch={dispatch}
+            panelProps={panelProps}
+            canClose={true}
           />
-          <Box sx={{ flex: 1, overflow: "hidden" }}>
-            <LayoutRenderer
-              node={layout.root}
-              dispatch={dispatch}
-              panelProps={panelProps}
-              canClose={true}
-            />
-          </Box>
         </Box>
       </DragProvider>
     </Box>
