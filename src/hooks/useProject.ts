@@ -344,15 +344,17 @@ export function useProject(projectId: string) {
     setMessages((prev) => [...prev, { role: "assistant", content: "Aborted." }]);
   }, [projectId]);
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(async (extraUploads?: UploadedFile[]) => {
     const text = input.trim();
-    if (!text || loading) return;
+    const allUploads = [...pendingUploads, ...(extraUploads || [])];
+    if (!text && allUploads.length === 0) return;
+    if (loading) return;
 
     // Build the message sent to the agent (includes upload paths)
-    let agentMessage = text;
-    if (pendingUploads.length > 0) {
-      const uploads = pendingUploads.map((u) => `[uploaded file: ${u.remotePath}]`).join("\n");
-      agentMessage = uploads + "\n" + text;
+    let agentMessage = text || "See the attached file(s).";
+    if (allUploads.length > 0) {
+      const uploads = allUploads.map((u) => `[uploaded file: ${u.remotePath}]`).join("\n");
+      agentMessage = uploads + "\n" + (text || "");
       setPendingUploads([]);
     }
 

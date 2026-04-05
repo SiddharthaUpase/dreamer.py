@@ -122,12 +122,8 @@ export default function ProjectIDE({ projectId }: Props) {
     onClear: handleClearChat, onCompact: handleCompact,
     onFileUpload: handleUploadFile,
     onSendWithFiles: async (files: File[]) => {
-      // Upload files first, then send message with paths
       const uploaded = await handleUploadFiles(files);
-      // Trigger send after uploads complete (pendingUploads will be populated)
-      if (uploaded.length > 0 || input.trim()) {
-        handleSend();
-      }
+      handleSend(uploaded);
     },
     previewUrl, previewPort, projectTemplate, changePreviewPort,
     iframeKey, setIframeKey,
