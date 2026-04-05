@@ -48,7 +48,7 @@ export interface PanelProps {
   onClear: () => void;
   onCompact: () => void;
   onFileUpload: (file: File) => void;
-  onSendWithFiles?: (files: File[]) => void;
+  onSendWithFiles?: (files: File[]) => Promise<void>;
   previewUrl: string | null;
   previewPort: number;
   projectTemplate: string;

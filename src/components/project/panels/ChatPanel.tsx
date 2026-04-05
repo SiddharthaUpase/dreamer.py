@@ -97,7 +97,7 @@ interface Props {
   setSelectedModel: (v: string) => void;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   onSend: () => void;
-  onSendWithFiles?: (files: File[]) => void;
+  onSendWithFiles?: (files: File[]) => Promise<void>;
   onAbort: () => void;
   onClear: () => void;
   onCompact: () => void;
@@ -138,10 +138,15 @@ export default function ChatPanel({
     setStagedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleSendWithStagedFiles = () => {
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+
+  const handleSendWithStagedFiles = async () => {
     if (stagedFiles.length > 0 && onSendWithFiles) {
-      onSendWithFiles(stagedFiles);
+      setUploadingFiles(true);
+      const filesToSend = [...stagedFiles];
       setStagedFiles([]);
+      await onSendWithFiles(filesToSend);
+      setUploadingFiles(false);
     } else {
       onSend();
     }
@@ -291,7 +296,7 @@ export default function ChatPanel({
           size="small"
           multiline
           maxRows={4}
-          placeholder={loading ? "Working..." : "Ask anything..."}
+          placeholder={uploadingFiles ? "Uploading files..." : loading ? "Working..." : "Ask anything..."}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -300,7 +305,7 @@ export default function ChatPanel({
               handleSendWithStagedFiles();
             }
           }}
-          disabled={loading}
+          disabled={loading || uploadingFiles}
           InputProps={{
             startAdornment: (
               <InputAdornment position="start">
@@ -316,7 +321,9 @@ export default function ChatPanel({
             ),
             endAdornment: (
               <InputAdornment position="end">
-                {loading ? (
+                {uploadingFiles ? (
+                  <CircularProgress size={16} thickness={5} sx={{ color: "primary.main" }} />
+                ) : loading ? (
                   <IconButton size="small" onClick={onAbort} sx={{ width: 26, height: 26, color: "error.main" }}>
                     <StopIcon sx={{ fontSize: 13 }} />
                   </IconButton>
