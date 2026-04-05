@@ -201,157 +201,57 @@ export default function ChatPanel({
         </Box>
       )}
 
-      {/* Messages */}
-      <Box ref={scrollContainerRef} sx={{ flex: 1, overflowY: "auto", px: 2, py: 2 }}>
-        {messages.length === 0 && !loading && (
-          <Typography variant="body2" sx={{ color: "text.secondary", textAlign: "center", mt: 4 }}>
+      {/* Empty state — centered input */}
+      {messages.length === 0 && !loading ? (
+        <Box sx={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", px: 3 }}>
+          <Typography
+            sx={{
+              fontSize: "1.4rem",
+              fontWeight: 600,
+              color: "text.primary",
+              mb: 2.5,
+              textAlign: "center",
+            }}
+          >
             What do you want to build?
           </Typography>
-        )}
-        {messages.map((msg, i) => (
-          <MessageBubble key={i} msg={msg} isStreaming={loading && i === messages.length - 1} />
-        ))}
-        {/* Show thinking indicator when loading but no assistant message yet */}
-        {loading && (messages.length === 0 || messages[messages.length - 1]?.role === "user") && (
-          <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 0.6, py: 0.5 }}>
-            <CircularProgress size={12} thickness={5} sx={{ color: "#71717A" }} />
-            <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.85rem" }}>Thinking...</Typography>
+          <Box sx={{ width: "100%", maxWidth: 480 }}>
+            <ChatInput
+              input={input} setInput={setInput} loading={loading} uploadingFiles={uploadingFiles}
+              stagedFiles={stagedFiles} filePreviews={filePreviews}
+              fileRef={fileRef} addFiles={addFiles} removeFile={removeFile}
+              handleSendWithStagedFiles={handleSendWithStagedFiles} onAbort={onAbort}
+            />
           </Box>
-        )}
-        {/* Spacer to push content up when loading */}
-        {loading && <Box sx={{ minHeight: "30vh" }} />}
-        <div ref={messagesEndRef} />
-      </Box>
-
-      {/* Input */}
-      <Box sx={{ px: 2, pt: 1, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
-        {/* Staged file previews */}
-        {stagedFiles.length > 0 && (
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mb: 1 }}>
-            {stagedFiles.map((file, i) => {
-              const key = file.name + file.size;
-              const preview = filePreviews[key];
-              const isImage = file.type.startsWith("image/");
-              return (
-                <Box
-                  key={key + i}
-                  sx={{
-                    position: "relative",
-                    borderRadius: 2,
-                    overflow: "hidden",
-                    border: "1px solid rgba(0,0,0,0.1)",
-                    bgcolor: "#F4F4F6",
-                    ...(isImage
-                      ? { width: 72, height: 72 }
-                      : { display: "flex", alignItems: "center", gap: 0.5, px: 1, py: 0.5 }),
-                  }}
-                >
-                  {isImage && preview ? (
-                    <img src={preview} alt={file.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  ) : (
-                    <>
-                      <AttachFileIcon sx={{ fontSize: 12, color: "text.secondary" }} />
-                      <Box sx={{ overflow: "hidden" }}>
-                        <Typography sx={{ fontSize: "0.72rem", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 100 }}>
-                          {file.name}
-                        </Typography>
-                        <Typography sx={{ fontSize: "0.65rem", color: "text.secondary" }}>
-                          {file.size < 1024 ? `${file.size}B` : file.size < 1048576 ? `${(file.size / 1024).toFixed(1)}KB` : `${(file.size / 1048576).toFixed(1)}MB`}
-                        </Typography>
-                      </Box>
-                    </>
-                  )}
-                  {/* Remove button */}
-                  <IconButton
-                    size="small"
-                    onClick={() => removeFile(i)}
-                    sx={{
-                      position: "absolute", top: 2, right: 2,
-                      width: 18, height: 18,
-                      bgcolor: "rgba(0,0,0,0.55)", color: "#fff",
-                      "&:hover": { bgcolor: "rgba(0,0,0,0.75)" },
-                    }}
-                  >
-                    <DeleteOutlineIcon sx={{ fontSize: 11 }} />
-                  </IconButton>
-                </Box>
-              );
-            })}
+        </Box>
+      ) : (
+        <>
+          {/* Messages */}
+          <Box ref={scrollContainerRef} sx={{ flex: 1, overflowY: "auto", px: 2, py: 2 }}>
+            {messages.map((msg, i) => (
+              <MessageBubble key={i} msg={msg} isStreaming={loading && i === messages.length - 1} />
+            ))}
+            {loading && (messages.length === 0 || messages[messages.length - 1]?.role === "user") && (
+              <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 0.6, py: 0.5 }}>
+                <CircularProgress size={12} thickness={5} sx={{ color: "#71717A" }} />
+                <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.85rem" }}>Thinking...</Typography>
+              </Box>
+            )}
+            {loading && <Box sx={{ minHeight: "30vh" }} />}
+            <div ref={messagesEndRef} />
           </Box>
-        )}
 
-        <input
-          type="file"
-          ref={fileRef}
-          multiple
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const files = e.target.files;
-            if (files && files.length > 0) addFiles(files);
-            e.target.value = "";
-          }}
-        />
-        <TextField
-          fullWidth
-          size="small"
-          multiline
-          maxRows={4}
-          placeholder={uploadingFiles ? "Uploading files..." : loading ? "Working..." : "Ask anything..."}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSendWithStagedFiles();
-            }
-          }}
-          disabled={loading || uploadingFiles}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <IconButton
-                  size="small"
-                  onClick={() => fileRef.current?.click()}
-                  disabled={loading}
-                  sx={{ width: 26, height: 26, color: "text.secondary" }}
-                >
-                  <AttachFileIcon sx={{ fontSize: 14 }} />
-                </IconButton>
-              </InputAdornment>
-            ),
-            endAdornment: (
-              <InputAdornment position="end">
-                {uploadingFiles ? (
-                  <CircularProgress size={16} thickness={5} sx={{ color: "primary.main" }} />
-                ) : loading ? (
-                  <IconButton size="small" onClick={onAbort} sx={{ width: 26, height: 26, color: "error.main" }}>
-                    <StopIcon sx={{ fontSize: 13 }} />
-                  </IconButton>
-                ) : (
-                  <IconButton
-                    size="small"
-                    onClick={handleSendWithStagedFiles}
-                    disabled={!input.trim() && stagedFiles.length === 0}
-                    sx={{
-                      bgcolor: (input.trim() || stagedFiles.length > 0) ? "primary.main" : "transparent",
-                      color: (input.trim() || stagedFiles.length > 0) ? "#fff" : "text.secondary",
-                      width: 26, height: 26,
-                      "&:hover": { bgcolor: input.trim() ? "primary.dark" : "transparent" },
-                    }}
-                  >
-                    <SendIcon sx={{ fontSize: 13 }} />
-                  </IconButton>
-                )}
-              </InputAdornment>
-            ),
-          }}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              borderRadius: 2, bgcolor: "#F8F8FA", fontSize: "0.95rem",
-            },
-          }}
-        />
-      </Box>
+          {/* Input at bottom */}
+          <Box sx={{ px: 2, pt: 1, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
+            <ChatInput
+              input={input} setInput={setInput} loading={loading} uploadingFiles={uploadingFiles}
+              stagedFiles={stagedFiles} filePreviews={filePreviews}
+              fileRef={fileRef} addFiles={addFiles} removeFile={removeFile}
+              handleSendWithStagedFiles={handleSendWithStagedFiles} onAbort={onAbort}
+            />
+          </Box>
+        </>
+      )}
 
       {/* Context bar */}
       <Box sx={{ px: 2, pb: 1, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -458,6 +358,154 @@ function ModelSelector({ selectedModel, setSelectedModel, disabled }: { selected
         ))}
       </Select>
     </Box>
+  );
+}
+
+// ===== Chat input (shared between empty state and bottom bar) =====
+
+function ChatInput({
+  input, setInput, loading, uploadingFiles, stagedFiles, filePreviews, fileRef, addFiles, removeFile, handleSendWithStagedFiles, onAbort,
+}: {
+  input: string;
+  setInput: (v: string) => void;
+  loading: boolean;
+  uploadingFiles: boolean;
+  stagedFiles: File[];
+  filePreviews: Record<string, string>;
+  fileRef: React.RefObject<HTMLInputElement | null>;
+  addFiles: (files: FileList | File[]) => void;
+  removeFile: (i: number) => void;
+  handleSendWithStagedFiles: () => void;
+  onAbort: () => void;
+}) {
+  return (
+    <>
+      {/* Staged file previews */}
+      {stagedFiles.length > 0 && (
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mb: 1 }}>
+          {stagedFiles.map((file, i) => {
+            const key = file.name + file.size;
+            const preview = filePreviews[key];
+            const isImage = file.type.startsWith("image/");
+            return (
+              <Box
+                key={key + i}
+                sx={{
+                  position: "relative",
+                  borderRadius: 2,
+                  overflow: "hidden",
+                  border: "1px solid rgba(0,0,0,0.1)",
+                  bgcolor: "#F4F4F6",
+                  ...(isImage
+                    ? { width: 72, height: 72 }
+                    : { display: "flex", alignItems: "center", gap: 0.5, px: 1, py: 0.5 }),
+                }}
+              >
+                {isImage && preview ? (
+                  <img src={preview} alt={file.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                ) : (
+                  <>
+                    <AttachFileIcon sx={{ fontSize: 12, color: "text.secondary" }} />
+                    <Box sx={{ overflow: "hidden" }}>
+                      <Typography sx={{ fontSize: "0.72rem", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 100 }}>
+                        {file.name}
+                      </Typography>
+                      <Typography sx={{ fontSize: "0.65rem", color: "text.secondary" }}>
+                        {file.size < 1024 ? `${file.size}B` : file.size < 1048576 ? `${(file.size / 1024).toFixed(1)}KB` : `${(file.size / 1048576).toFixed(1)}MB`}
+                      </Typography>
+                    </Box>
+                  </>
+                )}
+                <IconButton
+                  size="small"
+                  onClick={() => removeFile(i)}
+                  sx={{
+                    position: "absolute", top: 2, right: 2,
+                    width: 18, height: 18,
+                    bgcolor: "rgba(0,0,0,0.55)", color: "#fff",
+                    "&:hover": { bgcolor: "rgba(0,0,0,0.75)" },
+                  }}
+                >
+                  <DeleteOutlineIcon sx={{ fontSize: 11 }} />
+                </IconButton>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
+
+      <input
+        type="file"
+        ref={fileRef}
+        multiple
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const files = e.target.files;
+          if (files && files.length > 0) addFiles(files);
+          e.target.value = "";
+        }}
+      />
+      <TextField
+        fullWidth
+        size="small"
+        multiline
+        maxRows={4}
+        placeholder={uploadingFiles ? "Uploading files..." : loading ? "Working..." : "Ask anything..."}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSendWithStagedFiles();
+          }
+        }}
+        disabled={loading || uploadingFiles}
+        InputProps={{
+          startAdornment: (
+            <InputAdornment position="start">
+              <IconButton
+                size="small"
+                onClick={() => fileRef.current?.click()}
+                disabled={loading}
+                sx={{ width: 26, height: 26, color: "text.secondary" }}
+              >
+                <AttachFileIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </InputAdornment>
+          ),
+          endAdornment: (
+            <InputAdornment position="end">
+              {uploadingFiles ? (
+                <CircularProgress size={16} thickness={5} sx={{ color: "primary.main" }} />
+              ) : loading ? (
+                <IconButton size="small" onClick={onAbort} sx={{ width: 26, height: 26, color: "error.main" }}>
+                  <StopIcon sx={{ fontSize: 13 }} />
+                </IconButton>
+              ) : (
+                <IconButton
+                  size="small"
+                  onClick={handleSendWithStagedFiles}
+                  disabled={!input.trim() && stagedFiles.length === 0}
+                  sx={{
+                    bgcolor: (input.trim() || stagedFiles.length > 0) ? "primary.main" : "transparent",
+                    color: (input.trim() || stagedFiles.length > 0) ? "#fff" : "text.secondary",
+                    width: 26, height: 26,
+                    "&:hover": { bgcolor: (input.trim() || stagedFiles.length > 0) ? "primary.dark" : "transparent" },
+                  }}
+                >
+                  <SendIcon sx={{ fontSize: 13 }} />
+                </IconButton>
+              )}
+            </InputAdornment>
+          ),
+        }}
+        sx={{
+          "& .MuiOutlinedInput-root": {
+            borderRadius: 2, bgcolor: "#F8F8FA", fontSize: "0.95rem",
+          },
+        }}
+      />
+    </>
   );
 }
 
