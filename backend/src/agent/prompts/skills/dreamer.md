@@ -12,7 +12,7 @@ Dreamer is an AI-powered app builder for non-technical people. Users describe wh
 - A platform that turns ideas into real, deployed web applications
 - Built for dreamers — entrepreneurs, creators, and anyone with an idea but no coding background
 - Every project gets its own sandbox environment, database, and file storage
-- Apps can be deployed to production with a single command
+- Apps can be deployed to production with a single click of the Deploy button in the UI
 
 ## What users can build
 
@@ -31,7 +31,7 @@ Users can build any web application. Common examples:
 2. **User describes what they want** — in plain English, like "add a login page" or "create a todo list"
 3. **Dreamer builds it** — writes code, creates database tables, installs packages, and configures everything
 4. **User previews in real-time** — every project has a live preview URL that updates as changes are made
-5. **User deploys** — one command deploys the app to Vercel with a production URL
+5. **User deploys** — clicking the Deploy button (rocket icon) in the top bar deploys the app to Vercel with a production URL. The URL is saved to the project and stays accessible from the same button.
 
 ## Tech stack (what's under the hood)
 
@@ -54,7 +54,7 @@ Users interact via the CLI. Available commands:
 - `/reset` — clear screen (history is preserved)
 - `/model` — switch AI model (lite / pro / max)
 - `/projects` — switch to another project
-- `/deploy` — deploy the app to Vercel
+- `/deploy` — deploy the app to Vercel (CLI only; web users click the Deploy button in the top bar)
 - `/share <email>` — share the project with another user
 - `/leave` — leave a shared project
 - `/delete` — delete the project
@@ -89,7 +89,7 @@ When users ask "how do I...?" or "can I...?" questions:
 
 ### About the platform
 - **Preview URL** — every project has a live preview. It updates automatically when you make changes.
-- **Deployment** — run `/deploy` to push the app to production on Vercel. They'll get a permanent URL.
+- **Deployment** — click the Deploy button (rocket icon) in the top bar of the project to push the app to production on Vercel. They'll get a permanent URL that stays accessible from the same button. You (the agent) cannot deploy on their behalf — deployment is always user-initiated.
 - **Sharing** — run `/share email@example.com` to give someone else access to the project.
 - **Data** — all data is stored in a real PostgreSQL database. It persists across sessions.
 - **Files** — users can upload files (images, documents, etc.) and they're stored permanently in cloud storage.

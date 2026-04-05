@@ -13,6 +13,7 @@ import ListItemText from "@mui/material/ListItemText";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import AddIcon from "@mui/icons-material/Add";
 import RocketLaunchIcon from "@mui/icons-material/RocketLaunch";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import ChatIcon from "@mui/icons-material/Chat";
 import CodeIcon from "@mui/icons-material/Code";
 import LanguageIcon from "@mui/icons-material/Language";
@@ -39,7 +40,7 @@ export default function ProjectIDE({ projectId }: Props) {
     messagesEndRef, handleSend, handleAbort, handleClose,
     handleClearChat, handleCompact, handleDeploy, handleUploadFile,
     handleUploadFiles,
-    deploying, terminalUrl, savedLayout, saveLayout,
+    deploying, deployedUrl, terminalUrl, savedLayout, saveLayout,
   } = useProject(projectId);
 
   const [layout, dispatch] = useReducer(layoutReducer, DEFAULT_LAYOUT);
@@ -189,7 +190,22 @@ export default function ProjectIDE({ projectId }: Props) {
           </MenuItem>
         </Menu>
 
-        <Tooltip title="Deploy to Vercel">
+        {deployedUrl && !deploying && (
+          <Tooltip title={`Open live site — ${deployedUrl}`}>
+            <IconButton
+              size="small"
+              component="a"
+              href={deployedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{ color: "text.secondary" }}
+            >
+              <OpenInNewIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+
+        <Tooltip title={deployedUrl ? "Redeploy to Vercel" : "Deploy to Vercel"}>
           <IconButton
             size="small"
             disabled={deploying || loading}

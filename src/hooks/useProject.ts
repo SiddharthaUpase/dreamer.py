@@ -256,6 +256,7 @@ export function useProject(projectId: string) {
         if (data.template) setProjectTemplate(data.template);
         console.log("[useProject] connect response layout:", data.layout ? "present" : "null");
         if (data.layout) setSavedLayout(data.layout);
+        if (data.deployedUrl) setDeployedUrl(data.deployedUrl);
         if (data.messages?.length) {
           setMessages(dbMessagesToChat(data.messages));
         }
@@ -530,7 +531,7 @@ export function useProject(projectId: string) {
   }, [projectId]);
 
   const [deploying, setDeploying] = useState(false);
-  const [deployUrl, setDeployUrl] = useState<string | null>(null);
+  const [deployedUrl, setDeployedUrl] = useState<string | null>(null);
 
   const handleDeploy = useCallback(async () => {
     setDeploying(true);
@@ -556,7 +557,7 @@ export function useProject(projectId: string) {
           try {
             const event = JSON.parse(line.slice(6));
             if (event.type === "result" && event.url) {
-              setDeployUrl(event.url);
+              setDeployedUrl(event.url);
               setMessages((prev) => [
                 ...prev.slice(0, -1),
                 { role: "assistant", content: `Deployed! ${event.url}` },
@@ -618,7 +619,7 @@ export function useProject(projectId: string) {
     contextInfo,
     compacting,
     deploying,
-    deployUrl,
+    deployedUrl,
     savedLayout,
     saveLayout,
     messagesEndRef,
