@@ -33,10 +33,12 @@ export default function ProjectIDE({ projectId }: Props) {
 
   const {
     messages, projectName, input, setInput, loading, toolActivities,
-    previewUrl, iframeKey, setIframeKey, sandboxStatus, sandboxError,
+    previewUrl, previewPort, projectTemplate, changePreviewPort,
+    iframeKey, setIframeKey, sandboxStatus, sandboxError,
     selectedModel, setSelectedModel, contextInfo, compacting,
     messagesEndRef, handleSend, handleAbort, handleClose,
     handleClearChat, handleCompact, handleDeploy, handleUploadFile,
+    handleUploadFiles,
     deploying, terminalUrl, savedLayout, saveLayout,
   } = useProject(projectId);
 
@@ -118,11 +120,13 @@ export default function ProjectIDE({ projectId }: Props) {
     contextInfo, compacting, selectedModel, setSelectedModel,
     messagesEndRef, onSend: handleSend, onAbort: handleAbort,
     onClear: handleClearChat, onCompact: handleCompact,
-    onFileUpload: async (file: File) => {
-      const path = await handleUploadFile(file);
-      if (path) setInput((prev: string) => prev + (prev ? " " : "") + `[uploaded: ${path}]`);
+    onFileUpload: handleUploadFile,
+    onSendWithFiles: async (files: File[]) => {
+      const uploaded = await handleUploadFiles(files);
+      handleSend(uploaded);
     },
-    previewUrl, iframeKey, setIframeKey,
+    previewUrl, previewPort, projectTemplate, changePreviewPort,
+    iframeKey, setIframeKey,
     terminalUrl,
   };
 

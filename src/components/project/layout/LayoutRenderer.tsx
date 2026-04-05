@@ -48,7 +48,11 @@ export interface PanelProps {
   onClear: () => void;
   onCompact: () => void;
   onFileUpload: (file: File) => void;
+  onSendWithFiles?: (files: File[]) => Promise<void>;
   previewUrl: string | null;
+  previewPort: number;
+  projectTemplate: string;
+  changePreviewPort: (port: number) => Promise<string | null>;
   iframeKey: number;
   setIframeKey: (fn: (k: number) => number) => void;
   terminalUrl: string | null;
@@ -225,6 +229,7 @@ function PanelLeaf({
             onClear={panelProps.onClear}
             onCompact={panelProps.onCompact}
             onFileUpload={panelProps.onFileUpload}
+            onSendWithFiles={panelProps.onSendWithFiles}
           />
         )}
         {node.panelType === "terminal" && (
@@ -233,6 +238,9 @@ function PanelLeaf({
         {node.panelType === "browser" && (
           <BrowserPanel
             previewUrl={panelProps.previewUrl}
+            previewPort={panelProps.previewPort}
+            projectTemplate={panelProps.projectTemplate}
+            changePreviewPort={panelProps.changePreviewPort}
             iframeKey={panelProps.iframeKey}
             setIframeKey={panelProps.setIframeKey}
           />
