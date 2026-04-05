@@ -97,6 +97,7 @@ interface Props {
   setSelectedModel: (v: string) => void;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   onSend: () => void;
+  onSendWithFiles?: (files: File[]) => void;
   onAbort: () => void;
   onClear: () => void;
   onCompact: () => void;
@@ -106,11 +107,45 @@ interface Props {
 export default function ChatPanel({
   messages, input, setInput, loading, toolActivities,
   contextInfo, compacting, selectedModel, setSelectedModel,
-  messagesEndRef, onSend, onAbort, onClear, onCompact, onFileUpload,
+  messagesEndRef, onSend, onSendWithFiles, onAbort, onClear, onCompact, onFileUpload,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  const [filePreviews, setFilePreviews] = useState<Record<string, string>>({});
+
+  // Generate image previews for staged files
+  useEffect(() => {
+    const newPreviews: Record<string, string> = {};
+    const urls: string[] = [];
+    for (const file of stagedFiles) {
+      if (file.type.startsWith("image/")) {
+        const url = URL.createObjectURL(file);
+        newPreviews[file.name + file.size] = url;
+        urls.push(url);
+      }
+    }
+    setFilePreviews(newPreviews);
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, [stagedFiles]);
+
+  const addFiles = (files: FileList | File[]) => {
+    setStagedFiles((prev) => [...prev, ...Array.from(files)]);
+  };
+
+  const removeFile = (index: number) => {
+    setStagedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSendWithStagedFiles = () => {
+    if (stagedFiles.length > 0 && onSendWithFiles) {
+      onSendWithFiles(stagedFiles);
+      setStagedFiles([]);
+    } else {
+      onSend();
+    }
+  };
 
   // When loading starts, scroll to bottom to create clean workspace
   useEffect(() => {
@@ -120,8 +155,47 @@ export default function ChatPanel({
     }
   }, [loading]);
 
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    addFiles(files);
+  };
+
   return (
-    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+    <Box
+      sx={{ height: "100%", display: "flex", flexDirection: "column", position: "relative" }}
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+      onDragLeave={(e) => {
+        // Only hide overlay if leaving the container entirely
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setDragOver(false);
+      }}
+      onDrop={handleDrop}
+    >
+      {/* Full-panel drop overlay */}
+      {dragOver && (
+        <Box
+          sx={{
+            position: "absolute", inset: 0, zIndex: 20,
+            bgcolor: "rgba(139, 105, 20, 0.08)",
+            border: "2px dashed",
+            borderColor: "primary.main",
+            borderRadius: 2,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            pointerEvents: "none",
+          }}
+        >
+          <Box sx={{ textAlign: "center" }}>
+            <AttachFileIcon sx={{ fontSize: 32, color: "primary.main", mb: 0.5 }} />
+            <Typography sx={{ color: "primary.main", fontWeight: 600, fontSize: "0.95rem" }}>
+              Drop files here
+            </Typography>
+          </Box>
+        </Box>
+      )}
+
       {/* Messages */}
       <Box ref={scrollContainerRef} sx={{ flex: 1, overflowY: "auto", px: 2, py: 2 }}>
         {messages.length === 0 && !loading && (
@@ -145,24 +219,70 @@ export default function ChatPanel({
       </Box>
 
       {/* Input */}
-      <Box
-        sx={{ px: 2, pt: 1, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          const file = e.dataTransfer.files?.[0];
-          if (file) onFileUpload(file);
-        }}
-      >
+      <Box sx={{ px: 2, pt: 1, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
+        {/* Staged file previews */}
+        {stagedFiles.length > 0 && (
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mb: 1 }}>
+            {stagedFiles.map((file, i) => {
+              const key = file.name + file.size;
+              const preview = filePreviews[key];
+              const isImage = file.type.startsWith("image/");
+              return (
+                <Box
+                  key={key + i}
+                  sx={{
+                    position: "relative",
+                    borderRadius: 2,
+                    overflow: "hidden",
+                    border: "1px solid rgba(0,0,0,0.1)",
+                    bgcolor: "#F4F4F6",
+                    ...(isImage
+                      ? { width: 72, height: 72 }
+                      : { display: "flex", alignItems: "center", gap: 0.5, px: 1, py: 0.5 }),
+                  }}
+                >
+                  {isImage && preview ? (
+                    <img src={preview} alt={file.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <>
+                      <AttachFileIcon sx={{ fontSize: 12, color: "text.secondary" }} />
+                      <Box sx={{ overflow: "hidden" }}>
+                        <Typography sx={{ fontSize: "0.72rem", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 100 }}>
+                          {file.name}
+                        </Typography>
+                        <Typography sx={{ fontSize: "0.65rem", color: "text.secondary" }}>
+                          {file.size < 1024 ? `${file.size}B` : file.size < 1048576 ? `${(file.size / 1024).toFixed(1)}KB` : `${(file.size / 1048576).toFixed(1)}MB`}
+                        </Typography>
+                      </Box>
+                    </>
+                  )}
+                  {/* Remove button */}
+                  <IconButton
+                    size="small"
+                    onClick={() => removeFile(i)}
+                    sx={{
+                      position: "absolute", top: 2, right: 2,
+                      width: 18, height: 18,
+                      bgcolor: "rgba(0,0,0,0.55)", color: "#fff",
+                      "&:hover": { bgcolor: "rgba(0,0,0,0.75)" },
+                    }}
+                  >
+                    <DeleteOutlineIcon sx={{ fontSize: 11 }} />
+                  </IconButton>
+                </Box>
+              );
+            })}
+          </Box>
+        )}
+
         <input
           type="file"
           ref={fileRef}
+          multiple
           style={{ display: "none" }}
           onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) onFileUpload(file);
+            const files = e.target.files;
+            if (files && files.length > 0) addFiles(files);
             e.target.value = "";
           }}
         />
@@ -171,13 +291,13 @@ export default function ChatPanel({
           size="small"
           multiline
           maxRows={4}
-          placeholder={dragOver ? "Drop file here..." : loading ? "Working..." : "Ask anything..."}
+          placeholder={loading ? "Working..." : "Ask anything..."}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              onSend();
+              handleSendWithStagedFiles();
             }
           }}
           disabled={loading}
@@ -203,11 +323,11 @@ export default function ChatPanel({
                 ) : (
                   <IconButton
                     size="small"
-                    onClick={onSend}
-                    disabled={!input.trim()}
+                    onClick={handleSendWithStagedFiles}
+                    disabled={!input.trim() && stagedFiles.length === 0}
                     sx={{
-                      bgcolor: input.trim() ? "primary.main" : "transparent",
-                      color: input.trim() ? "#fff" : "text.secondary",
+                      bgcolor: (input.trim() || stagedFiles.length > 0) ? "primary.main" : "transparent",
+                      color: (input.trim() || stagedFiles.length > 0) ? "#fff" : "text.secondary",
                       width: 26, height: 26,
                       "&:hover": { bgcolor: input.trim() ? "primary.dark" : "transparent" },
                     }}

@@ -144,6 +144,8 @@ export function useProject(projectId: string) {
   const [loading, setLoading] = useState(false);
   const [toolActivities, setToolActivities] = useState<ToolActivity[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewPort, setPreviewPort] = useState<number>(3000);
+  const [projectTemplate, setProjectTemplate] = useState<string>("nextjs");
   const [terminalUrl, setTerminalUrl] = useState<string | null>(null);
   const [savedLayout, setSavedLayout] = useState<any>(null);
   const [iframeKey, setIframeKey] = useState(0);
@@ -208,6 +210,31 @@ export function useProject(projectId: string) {
     setPendingUploads((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  // Change preview port — creates a new preview URL for the given port
+  const changePreviewPort = useCallback(async (port: number): Promise<string | null> => {
+    setPreviewPort(port);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API}/api/projects/${projectId}/preview`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ port }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return data.error || `Failed (${res.status})`;
+      }
+      if (data.previewUrl) {
+        setPreviewUrl(data.previewUrl);
+        setIframeKey((k) => k + 1);
+      }
+      return null;
+    } catch (err: any) {
+      console.error("[useProject] changePreviewPort error:", err.message);
+      return err.message || "Failed to change port";
+    }
+  }, [projectId]);
+
   // Wake sandbox on mount
   useEffect(() => {
     let cancelled = false;
@@ -226,6 +253,7 @@ export function useProject(projectId: string) {
         if (data.previewUrl) setPreviewUrl(data.previewUrl);
         if (data.terminalUrl) setTerminalUrl(data.terminalUrl);
         if (data.name) setProjectName(data.name);
+        if (data.template) setProjectTemplate(data.template);
         console.log("[useProject] connect response layout:", data.layout ? "present" : "null");
         if (data.layout) setSavedLayout(data.layout);
         if (data.messages?.length) {
@@ -575,6 +603,9 @@ export function useProject(projectId: string) {
     loading,
     toolActivities,
     previewUrl,
+    previewPort,
+    projectTemplate,
+    changePreviewPort,
     terminalUrl,
     iframeKey,
     setIframeKey,

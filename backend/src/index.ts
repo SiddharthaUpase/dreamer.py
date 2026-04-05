@@ -427,19 +427,21 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
       throw sbErr;
     }
 
-    // Get preview URL
+    // Get preview URL (only auto-create for nextjs; blank projects choose their own port)
     let previewUrl: string | null = null;
-    try {
-      const preview = await sandbox.previews.createIfNotExists({
-        metadata: { name: "dev-server-preview" },
-        spec: { port: 3000, public: true },
-      });
-      previewUrl = preview.spec?.url || null;
-      if (previewUrl && previewUrl !== project.preview_url) {
-        await updateProject(pid, { preview_url: previewUrl });
+    if (project.template === "nextjs") {
+      try {
+        const preview = await sandbox.previews.createIfNotExists({
+          metadata: { name: "dev-server-preview" },
+          spec: { port: 3000, public: true },
+        });
+        previewUrl = preview.spec?.url || null;
+        if (previewUrl && previewUrl !== project.preview_url) {
+          await updateProject(pid, { preview_url: previewUrl });
+        }
+      } catch {
+        previewUrl = project.preview_url;
       }
-    } catch {
-      previewUrl = project.preview_url;
     }
 
     // Get terminal URL (private preview on port 443, auth via BL API key)
@@ -498,11 +500,49 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
       previewUrl,
       terminalUrl,
       name: project.name,
+      template: project.template,
       messages,
       layout: project.layout || null,
     });
   } catch (err: any) {
     console.error("Failed to connect:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Preview Port =====
+
+app.post("/api/projects/:id/preview", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  const { port } = req.body;
+  if (!port || typeof port !== "number" || port < 1 || port > 65535) {
+    res.status(400).json({ error: "Valid port number (1-65535) is required" });
+    return;
+  }
+  const RESERVED_PORTS = [80, 443, 8080];
+  if (RESERVED_PORTS.includes(port)) {
+    res.status(400).json({ error: `Port ${port} is reserved. Use a port like 3000, 4000, or 5173.` });
+    return;
+  }
+
+  try {
+    const project = await getAccessibleProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+    const sandbox = await getProjectSandbox(pid);
+    const preview = await sandbox.previews.createIfNotExists({
+      metadata: { name: `preview-port-${port}` },
+      spec: { port, public: true },
+    });
+    const previewUrl = preview.spec?.url || null;
+
+    if (previewUrl) {
+      await updateProject(pid, { preview_url: previewUrl });
+    }
+
+    res.json({ previewUrl });
+  } catch (err: any) {
+    console.error("[preview] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
