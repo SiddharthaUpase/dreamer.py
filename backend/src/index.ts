@@ -26,6 +26,9 @@ import {
   getProjectMessages,
   saveMessages,
   deleteProjectMessages,
+  updateMessageCommitSha,
+  getMessageByCommitSha,
+  deleteMessagesAfter,
   addCollaborator,
   removeCollaborator,
   isCollaborator,
@@ -40,6 +43,7 @@ import {
 } from "./services/provisioning.js";
 import { deploy } from "./services/deploy.js";
 import { createDeviceCode, pollDeviceCode, approveDeviceCode, verifyApiKey } from "./services/cliAuth.js";
+import { isGitInitialized, initRepo, commitChanges, resetToCommit } from "./services/gitService.js";
 import { redeemStarterCode, checkUserAccess } from "./services/starterCode.js";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 
@@ -469,6 +473,19 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
     await injectProjectEnv(sandbox, envData);
     await injectSkills(sandbox);
 
+    // Initialize git repo for nextjs projects (idempotent)
+    if (project.template === "nextjs") {
+      try {
+        const gitReady = await isGitInitialized(sandbox);
+        if (!gitReady) {
+          const sha = await initRepo(sandbox);
+          console.log(`[connect] git repo initialized for project ${pid}, initial commit: ${sha}`);
+        }
+      } catch (gitErr: any) {
+        console.error(`[connect] git init failed (non-critical):`, gitErr.message);
+      }
+    }
+
     // Auto-start dev server for Next.js (fire-and-forget, don't block response)
     if (project.template === "nextjs") {
       (async () => {
@@ -728,6 +745,20 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
       }
     }
 
+    // Auto-commit for nextjs projects
+    if (project.template === "nextjs") {
+      try {
+        const commitSha = await commitChanges(sandbox, `Update: ${message.slice(0, 50)}`);
+        if (commitSha) {
+          console.log(`\x1b[2m[chat]\x1b[0m auto-commit: ${commitSha}`);
+          sendEvent({ type: "commit", sha: commitSha });
+          await updateMessageCommitSha(pid, req.userId!, commitSha);
+        }
+      } catch (gitErr: any) {
+        console.error(`\x1b[2m[chat]\x1b[0m auto-commit failed (non-critical):`, gitErr.message);
+      }
+    }
+
     // Collect output files
     const files = await collectOutputFiles(sandbox);
     if (files.length > 0) {
@@ -745,6 +776,49 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
 // Abort — handled by client closing SSE connection
 app.post("/api/projects/:id/abort", (_req, res) => {
   res.json({ status: "ok" });
+});
+
+// ===== Git Revert =====
+
+app.post("/api/projects/:id/revert", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  const { commit_sha } = req.body;
+
+  if (!commit_sha || typeof commit_sha !== "string") {
+    res.status(400).json({ error: "commit_sha is required" });
+    return;
+  }
+
+  try {
+    const project = await getAccessibleProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+    if (project.template !== "nextjs") {
+      res.status(400).json({ error: "Revert is only supported for web app projects" });
+      return;
+    }
+
+    // Find the message with this commit SHA
+    const targetMsg = await getMessageByCommitSha(pid, req.userId!, commit_sha);
+    if (!targetMsg) {
+      res.status(404).json({ error: "Commit not found in message history" });
+      return;
+    }
+
+    // Reset sandbox to that commit
+    const sandbox = await getProjectSandbox(pid);
+    await resetToCommit(sandbox, commit_sha);
+    console.log(`[revert] project=${pid} reset to commit ${commit_sha}`);
+
+    // Delete all messages after the target message
+    await deleteMessagesAfter(pid, req.userId!, targetMsg.created_at);
+    console.log(`[revert] deleted messages after ${targetMsg.created_at}`);
+
+    res.json({ status: "reverted", commit_sha });
+  } catch (err: any) {
+    console.error(`[revert] failed:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ===== History =====

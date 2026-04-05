@@ -25,6 +25,13 @@ import LanguageIcon from "@mui/icons-material/Language";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import RestoreIcon from "@mui/icons-material/Restore";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
+import DialogContentText from "@mui/material/DialogContentText";
+import DialogActions from "@mui/material/DialogActions";
+import Button from "@mui/material/Button";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, ToolActivity, ContextInfo, StreamSegment } from "@/hooks/useProject";
@@ -101,16 +108,20 @@ interface Props {
   onClear: () => void;
   onCompact: () => void;
   onFileUpload: (file: File) => void;
+  onRevert: (commitSha: string) => void;
+  reverting: boolean;
 }
 
 export default function ChatPanel({
   messages, input, setInput, loading, toolActivities,
   contextInfo, compacting, selectedModel, setSelectedModel,
   messagesEndRef, onSend, onAbort, onClear, onCompact, onFileUpload,
+  onRevert, reverting,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [revertTarget, setRevertTarget] = useState<string | null>(null);
 
   // When loading starts, scroll to bottom to create clean workspace
   useEffect(() => {
@@ -130,7 +141,12 @@ export default function ChatPanel({
           </Typography>
         )}
         {messages.map((msg, i) => (
-          <MessageBubble key={i} msg={msg} isStreaming={loading && i === messages.length - 1} />
+          <MessageBubble
+            key={i}
+            msg={msg}
+            isStreaming={loading && i === messages.length - 1}
+            onRevertClick={msg.commitSha ? () => setRevertTarget(msg.commitSha!) : undefined}
+          />
         ))}
         {/* Show thinking indicator when loading but no assistant message yet */}
         {loading && (messages.length === 0 || messages[messages.length - 1]?.role === "user") && (
@@ -259,6 +275,39 @@ export default function ChatPanel({
         </Box>
         <ModelSelector selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={loading} />
       </Box>
+
+      {/* Revert confirmation dialog */}
+      <Dialog
+        open={!!revertTarget}
+        onClose={() => !reverting && setRevertTarget(null)}
+        PaperProps={{ sx: { borderRadius: 3, maxWidth: 400 } }}
+      >
+        <DialogTitle sx={{ fontSize: "1rem", fontWeight: 600 }}>Revert to this point?</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ fontSize: "0.9rem" }}>
+            This will undo all changes made after this message. This action cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setRevertTarget(null)} disabled={reverting} size="small">
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              if (revertTarget) {
+                onRevert(revertTarget);
+                setRevertTarget(null);
+              }
+            }}
+            disabled={reverting}
+            variant="contained"
+            color="error"
+            size="small"
+          >
+            {reverting ? "Reverting..." : "Revert"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
@@ -345,12 +394,35 @@ const mdStyles = {
   "& li": { fontSize: "0.95rem" },
 };
 
-function MessageBubble({ msg, isStreaming }: { msg: ChatMessage; isStreaming?: boolean }) {
+function MessageBubble({ msg, isStreaming, onRevertClick }: { msg: ChatMessage; isStreaming?: boolean; onRevertClick?: () => void }) {
   const isUser = msg.role === "user";
 
   if (isUser) {
     return (
-      <Box sx={{ mb: 1.5, display: "flex", justifyContent: "flex-end" }}>
+      <Box
+        sx={{
+          mb: 1.5, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 0.5,
+          "&:hover .revert-btn": { opacity: 1 },
+        }}
+      >
+        {onRevertClick && (
+          <Tooltip title="Revert to this point">
+            <IconButton
+              className="revert-btn"
+              size="small"
+              onClick={onRevertClick}
+              sx={{
+                width: 22, height: 22,
+                color: "text.disabled",
+                opacity: 0,
+                transition: "opacity 0.15s",
+                "&:hover": { color: "warning.main" },
+              }}
+            >
+              <RestoreIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        )}
         <Box
           sx={{
             maxWidth: "90%", px: 1.5, py: 1,

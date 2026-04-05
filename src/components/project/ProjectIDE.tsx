@@ -38,6 +38,7 @@ export default function ProjectIDE({ projectId }: Props) {
     messagesEndRef, handleSend, handleAbort, handleClose,
     handleClearChat, handleCompact, handleDeploy, handleUploadFile,
     deploying, terminalUrl, savedLayout, saveLayout,
+    handleRevert, reverting,
   } = useProject(projectId);
 
   const [layout, dispatch] = useReducer(layoutReducer, DEFAULT_LAYOUT);
@@ -124,6 +125,7 @@ export default function ProjectIDE({ projectId }: Props) {
     },
     previewUrl, iframeKey, setIframeKey,
     terminalUrl,
+    onRevert: handleRevert, reverting,
   };
 
   return (

@@ -11,6 +11,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   segments?: StreamSegment[];
+  commitSha?: string;
 }
 
 // Legacy alias for components that reference this type
@@ -73,7 +74,11 @@ function dbMessagesToChat(dbMessages: any[]): ChatMessage[] {
     const msg = dbMessages[i];
 
     if (msg.role === "human") {
-      chatMessages.push({ role: "user", content: msg.content });
+      chatMessages.push({
+        role: "user",
+        content: msg.content,
+        ...(msg.commit_sha ? { commitSha: msg.commit_sha } : {}),
+      });
       i++;
     } else if (msg.role === "ai") {
       // Check if this AI message has tool_calls — if so, collect interleaved segments
@@ -458,6 +463,14 @@ export function useProject(projectId: string) {
               if (event.contextTokens != null && event.contextLimit != null) {
                 setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
               }
+            } else if (event.type === "commit") {
+              // Tag the user message that triggered this commit with the SHA
+              finalMessages = finalMessages.map((m, idx) =>
+                m.role === "user" && idx === nextMessages.length - 1
+                  ? { ...m, commitSha: event.sha }
+                  : m
+              );
+              setMessages(finalMessages);
             } else if (event.type === "error") {
               currentTextContent = "";
               segments.push({ type: "text", content: `Error: ${event.content}` });
@@ -497,6 +510,35 @@ export function useProject(projectId: string) {
     } catch (err: any) {
       console.error("[useProject] save layout failed:", err.message);
     }
+  }, [projectId]);
+
+  const [reverting, setReverting] = useState(false);
+
+  const handleRevert = useCallback(async (commitSha: string) => {
+    setReverting(true);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API}/api/projects/${projectId}/revert`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ commit_sha: commitSha }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Revert failed");
+      }
+      // Truncate local messages: keep everything up to and including the message with this commitSha
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.commitSha === commitSha);
+        if (idx === -1) return prev;
+        return prev.slice(0, idx + 1);
+      });
+      // Refresh preview
+      setIframeKey((k) => k + 1);
+    } catch (err: any) {
+      console.error("[useProject] revert failed:", err.message);
+    }
+    setReverting(false);
   }, [projectId]);
 
   const [deploying, setDeploying] = useState(false);
@@ -601,5 +643,7 @@ export function useProject(projectId: string) {
     handleShare,
     handleUploadFiles,
     removePendingUpload,
+    handleRevert,
+    reverting,
   };
 }

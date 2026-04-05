@@ -48,6 +48,8 @@ export interface PanelProps {
   onClear: () => void;
   onCompact: () => void;
   onFileUpload: (file: File) => void;
+  onRevert: (commitSha: string) => void;
+  reverting: boolean;
   previewUrl: string | null;
   iframeKey: number;
   setIframeKey: (fn: (k: number) => number) => void;
@@ -225,6 +227,8 @@ function PanelLeaf({
             onClear={panelProps.onClear}
             onCompact={panelProps.onCompact}
             onFileUpload={panelProps.onFileUpload}
+            onRevert={panelProps.onRevert}
+            reverting={panelProps.reverting}
           />
         )}
         {node.panelType === "terminal" && (

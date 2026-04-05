@@ -314,7 +314,7 @@ export function langChainToDbRow(msg: BaseMessage, projectId: string, userId?: s
       : JSON.stringify(msg.content);
 
   if (msg instanceof HumanMessage) {
-    return { project_id: projectId, role: "human", content, tool_calls: null, tool_call_id: null, name: null, user_id: userId || null };
+    return { project_id: projectId, role: "human", content, tool_calls: null, tool_call_id: null, name: null, user_id: userId || null, commit_sha: null };
   }
 
   if (msg instanceof ToolMessage) {
@@ -326,6 +326,7 @@ export function langChainToDbRow(msg: BaseMessage, projectId: string, userId?: s
       tool_call_id: msg.tool_call_id || null,
       name: msg.name || null,
       user_id: userId || null,
+      commit_sha: null,
     };
   }
 
@@ -334,7 +335,7 @@ export function langChainToDbRow(msg: BaseMessage, projectId: string, userId?: s
   if (aiMsg.tool_calls?.length) {
     toolCalls = aiMsg.tool_calls.map((tc) => ({ name: tc.name, args: tc.args, id: tc.id }));
   }
-  return { project_id: projectId, role: "ai", content, tool_calls: toolCalls, tool_call_id: null, name: null, user_id: userId || null };
+  return { project_id: projectId, role: "ai", content, tool_calls: toolCalls, tool_call_id: null, name: null, user_id: userId || null, commit_sha: null };
 }
 
 export function sanitizeHistory(messages: BaseMessage[]): BaseMessage[] {

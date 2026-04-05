@@ -29,6 +29,7 @@ export interface StoredMessage {
   tool_call_id: string | null;  // Tool messages: links to AI tool_call
   name: string | null;          // Tool messages: tool name
   user_id: string | null;       // Which user's conversation this belongs to
+  commit_sha: string | null;    // Git commit SHA if this message triggered a commit
   created_at: string;
 }
 
@@ -114,6 +115,51 @@ export async function deleteProjectMessages(projectId: string, userId?: string) 
     query = query.eq("user_id", userId);
   }
   const { error } = await query;
+  if (error) throw error;
+}
+
+/** Update the most recent human message for a project+user with a commit SHA */
+export async function updateMessageCommitSha(projectId: string, userId: string, commitSha: string) {
+  // Find the most recent human message
+  const { data, error: findErr } = await (supabase as any)
+    .from("messages")
+    .select("id")
+    .eq("project_id", projectId)
+    .eq("user_id", userId)
+    .eq("role", "human")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+  if (findErr || !data) return;
+
+  const { error } = await (supabase as any)
+    .from("messages")
+    .update({ commit_sha: commitSha })
+    .eq("id", data.id);
+  if (error) throw error;
+}
+
+/** Get a message by its commit SHA */
+export async function getMessageByCommitSha(projectId: string, userId: string, commitSha: string) {
+  const { data, error } = await (supabase as any)
+    .from("messages")
+    .select("*")
+    .eq("project_id", projectId)
+    .eq("user_id", userId)
+    .eq("commit_sha", commitSha)
+    .single();
+  if (error) return null;
+  return data as StoredMessage;
+}
+
+/** Delete all messages after a given timestamp for a project+user */
+export async function deleteMessagesAfter(projectId: string, userId: string, afterTimestamp: string) {
+  const { error } = await (supabase as any)
+    .from("messages")
+    .delete()
+    .eq("project_id", projectId)
+    .eq("user_id", userId)
+    .gt("created_at", afterTimestamp);
   if (error) throw error;
 }
 
