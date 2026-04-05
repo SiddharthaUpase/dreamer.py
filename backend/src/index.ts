@@ -3,8 +3,8 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import type { Request, Response, NextFunction } from "express";
-import type { SandboxInstance } from "@blaxel/core";
-import { createSandbox, getSandbox, deleteSandbox } from "./services/sandbox.js";
+import { deleteSandbox } from "./services/sandbox.js";
+import { getProjectSandbox } from "./services/sandboxHelper.js";
 import {
   runAgentStream,
   collectOutputFiles,
@@ -41,6 +41,8 @@ import {
 import { deploy } from "./services/deploy.js";
 import { createDeviceCode, pollDeviceCode, approveDeviceCode, verifyApiKey } from "./services/cliAuth.js";
 import { redeemStarterCode, checkUserAccess } from "./services/starterCode.js";
+import { agentQueue, publishAbort } from "./services/agentQueue.js";
+import { createAgentJob, getActiveJob } from "./services/agentJobs.js";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 
 // ===== Startup validation =====
@@ -122,39 +124,6 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
   console.log(`[auth] JWT valid, userId: ${user.id}`);
   req.userId = user.id;
   next();
-}
-
-// ===== Sandbox helpers =====
-async function getProjectSandbox(projectId: string): Promise<SandboxInstance> {
-  console.log(`[sandbox] getProjectSandbox("${projectId}")`);
-
-  const stored = await getProject(projectId);
-  console.log(`[sandbox] stored project:`, stored ? { sandbox_id: stored.sandbox_id, template: stored.template } : "null");
-
-  if (stored?.sandbox_id) {
-    console.log(`[sandbox] trying getSandbox("${projectId}")...`);
-    try {
-      const sb = await getSandbox(projectId);
-      console.log(`[sandbox] getSandbox succeeded: ${sb.metadata?.name}`);
-      return sb;
-    } catch (err: any) {
-      console.error(`[sandbox] getSandbox failed:`, { code: err.code, message: err.message, status_code: err.status_code });
-      /* fall through to create */
-    }
-  }
-
-  const template = stored?.template || "nextjs";
-  console.log(`[sandbox] creating new sandbox, template="${template}"...`);
-  console.log(`[sandbox] BL_API_KEY=${process.env.BL_API_KEY?.slice(0, 15)}...`);
-  console.log(`[sandbox] BL_WORKSPACE=${process.env.BL_WORKSPACE}`);
-
-  const sandbox = await createSandbox(projectId, template);
-  console.log(`[sandbox] createSandbox succeeded: ${sandbox.metadata?.name}`);
-
-  if (stored) {
-    await updateProject(projectId, { sandbox_id: sandbox.metadata?.name || `proj-${projectId}` });
-  }
-  return sandbox;
 }
 
 // Verify project ownership (owner-only operations)
@@ -667,10 +636,11 @@ app.post("/api/projects/:id/upload", upload.single("file"), async (req: AuthRequ
   }
 });
 
-// ===== Agent Chat (SSE) =====
+// ===== Agent Chat (job-based) =====
 
+// Enqueue an agent job. Returns jobId — frontend subscribes to agent_events via Supabase Realtime.
 app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
-  const { message, model } = req.body;
+  const { message, model, worktreeId } = req.body;
   const pid = paramId(req);
 
   if (!message || typeof message !== "string") {
@@ -685,106 +655,64 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
   const project = await getAccessibleProject(pid, req.userId!);
   if (!project) { res.status(404).json({ error: "Project not found" }); return; }
 
-  console.log(`\x1b[33m[chat]\x1b[0m project=${pid} model=${model || "claude-sonnet"} msg="${message.slice(0, 60)}${message.length > 60 ? "..." : ""}"`);
+  const hasAccess = await checkUserAccess(req.userId!);
+  if (!hasAccess) {
+    res.status(403).json({ error: "No access. Please redeem a starter code at /setup." });
+    return;
+  }
 
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering if proxied
-  res.flushHeaders();
-
-  const abortController = new AbortController();
-  res.on("close", () => { abortController.abort(); console.log(`\x1b[2m[chat]\x1b[0m stream closed for ${pid}`); });
-
-  // Disable response buffering for SSE
-  res.socket?.setNoDelay(true);
-
-  const sendEvent = (event: any) => {
-    if (abortController.signal.aborted) return;
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
+  console.log(`\x1b[33m[chat]\x1b[0m enqueue project=${pid} worktree=${worktreeId || "main"} msg="${message.slice(0, 60)}${message.length > 60 ? "..." : ""}"`);
 
   try {
-    const sandbox = await getProjectSandbox(pid);
-    console.log(`\x1b[2m[chat]\x1b[0m sandbox connected, loading history...`);
+    const job = await createAgentJob({
+      projectId: pid,
+      userId: req.userId!,
+      worktreeId: worktreeId || "main",
+      message,
+      model: model || "mimo",
+    });
 
-    const history = sanitizeHistory(
-      (await getProjectMessages(pid, req.userId!)).map(dbRowToLangChain)
-    );
-    console.log(`\x1b[2m[chat]\x1b[0m ${history.length} history messages, starting agent...`);
+    await agentQueue.add("run-agent", {
+      jobId: job.id,
+      projectId: pid,
+      userId: req.userId!,
+      worktreeId: worktreeId || "main",
+      message,
+      model: model || "mimo",
+    });
 
-    // Build configs
-    const dbConfig: DatabaseConfig | undefined = project.database_url
-      ? { connectionString: project.database_url }
-      : undefined;
-
-    const envVars = await readSandboxEnvVars(sandbox);
-    const deployConfig: DeployConfig | undefined = process.env.VERCEL_TOKEN
-      ? {
-          projectName: `vas-${project.name}`,
-          vercelToken: process.env.VERCEL_TOKEN,
-          vercelTeamId: process.env.VERCEL_TEAM_ID || undefined,
-          envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
-        }
-      : undefined;
-
-    // Check user has access (redeemed a starter code)
-    const hasAccess = await checkUserAccess(req.userId!);
-    if (!hasAccess) {
-      res.write(`data: ${JSON.stringify({ type: "error", content: "No access. Please redeem a starter code at /setup." })}\n\n`);
-      res.end();
-      return;
-    }
-
-    const result = await runAgentStream(
-      sandbox, history, message, model || "claude-sonnet",
-      sendEvent,
-      abortController.signal,
-      project.preview_url || undefined,
-      dbConfig,
-      deployConfig,
-    );
-
-    console.log(`\x1b[32m[chat]\x1b[0m agent done, ${result.newMessages.length} new messages, ${result.contextTokens} tokens`);
-
-    // Persist messages
-    if (result.newMessages.length > 0) {
-      try {
-        if ((result as any).compactedHistory) {
-          // Pre-run compaction happened — replace all old messages with compacted history
-          // This prevents the same 160k+ history from triggering compaction on every message
-          await deleteProjectMessages(pid, req.userId!);
-          const dbRows = (result as any).compactedHistory.map((m: any) => langChainToDbRow(m, pid, req.userId!));
-          await saveMessages(dbRows);
-          sendEvent({ type: "compacted", before: history.length, after: dbRows.length });
-          console.log(`\x1b[2m[chat]\x1b[0m compacted: replaced history with ${dbRows.length} messages`);
-        } else {
-          const dbRows = result.newMessages.map((m) => langChainToDbRow(m, pid, req.userId!));
-          await saveMessages(dbRows);
-          console.log(`\x1b[2m[chat]\x1b[0m persisted ${dbRows.length} messages`);
-        }
-      } catch (err: any) {
-        console.error(`\x1b[31m[chat]\x1b[0m failed to persist:`, err.message);
-      }
-    }
-
-    // Collect output files
-    const files = await collectOutputFiles(sandbox);
-    if (files.length > 0) {
-      res.write(`data: ${JSON.stringify({ type: "outputs", files })}\n\n`);
-    }
+    res.json({ jobId: job.id });
   } catch (err: any) {
-    if (!abortController.signal.aborted) {
-      res.write(`data: ${JSON.stringify({ type: "error", content: err.message })}\n\n`);
-    }
-  } finally {
-    res.end();
+    console.error(`[chat] failed to enqueue:`, err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Abort — handled by client closing SSE connection
-app.post("/api/projects/:id/abort", (_req, res) => {
-  res.json({ status: "ok" });
+// Abort — publishes to Redis so the worker can signal its AbortController
+app.post("/api/projects/:id/abort", async (req: AuthRequest, res) => {
+  const { jobId } = req.body;
+  if (!jobId) { res.status(400).json({ error: "jobId is required" }); return; }
+  try {
+    await publishAbort(jobId);
+    res.json({ status: "ok" });
+  } catch (err: any) {
+    console.error(`[abort] failed:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get the currently-active job for a project+worktree (used on frontend reconnect)
+app.get("/api/projects/:id/active-job", async (req: AuthRequest, res) => {
+  const pid = paramId(req);
+  const worktreeId = (req.query.worktreeId as string) || "main";
+  try {
+    const project = await getAccessibleProject(pid, req.userId!);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    const job = await getActiveJob(pid, worktreeId, req.userId!);
+    res.json({ job });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ===== History =====

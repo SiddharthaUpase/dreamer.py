@@ -157,6 +157,8 @@ export function useProject(projectId: string) {
   const [uploading, setUploading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const currentJobIdRef = useRef<string | null>(null);
+  const realtimeChannelRef = useRef<any>(null);
 
   // Share project with another user by email
   const handleShare = useCallback(async (email: string): Promise<{ status: string; error?: string }> => {
@@ -263,6 +265,20 @@ export function useProject(projectId: string) {
           setContextInfo({ tokens: data.contextTokens, limit: data.contextLimit });
         }
         setSandboxStatus("ready");
+
+        // Reconnect to any active agent job for this project+worktree
+        try {
+          const activeRes = await fetch(`${API}/api/projects/${projectId}/active-job?worktreeId=main`, { headers });
+          if (activeRes.ok) {
+            const { job } = await activeRes.json();
+            if (job && !cancelled) {
+              console.log(`[useProject] resuming active job ${job.id}`);
+              setLoading(true);
+              const baseMsgs = data.messages?.length ? dbMessagesToChat(data.messages) : [];
+              await subscribeToJob(job.id, baseMsgs);
+            }
+          }
+        } catch { /* ignore */ }
       } catch (err: any) {
         if (cancelled) return;
         setSandboxError(err.message);
@@ -271,7 +287,15 @@ export function useProject(projectId: string) {
     }
 
     openProject();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Tear down any active realtime subscription on unmount
+      if (realtimeChannelRef.current) {
+        const supabase = createClient();
+        supabase.removeChannel(realtimeChannelRef.current);
+        realtimeChannelRef.current = null;
+      }
+    };
   }, [projectId]);
 
   // Clear in-memory ref when leaving — Blaxel auto-scales to zero
@@ -331,18 +355,193 @@ export function useProject(projectId: string) {
   }, [projectId]);
 
   const handleAbort = useCallback(async () => {
-    abortRef.current?.abort();
+    const jobId = currentJobIdRef.current;
+    if (!jobId) {
+      setLoading(false);
+      setToolActivities([]);
+      return;
+    }
     try {
       const headers = await getAuthHeaders();
       await fetch(`${API}/api/projects/${projectId}/abort`, {
         method: "POST",
         headers,
+        body: JSON.stringify({ jobId }),
       });
     } catch { /* ignore */ }
-    setLoading(false);
-    setToolActivities([]);
-    setMessages((prev) => [...prev, { role: "assistant", content: "Aborted." }]);
+    // UI state will be updated when we receive the `aborted` event or job status change
   }, [projectId]);
+
+  /**
+   * Subscribe to an agent job's events via Supabase Realtime.
+   * Also replays any existing events (catch-up on reconnect).
+   * Updates messages/segments live as events arrive.
+   */
+  const subscribeToJob = useCallback(async (jobId: string, baseMessages: ChatMessage[]) => {
+    const supabase = createClient();
+    currentJobIdRef.current = jobId;
+
+    // Build segments from incoming events
+    let segments: StreamSegment[] = [];
+    let currentTextContent = "";
+    let finalMessages = baseMessages;
+
+    const updateAssistantMsg = (msgs: ChatMessage[]) => {
+      const lastContent = segments.filter((s) => s.type === "text").map((s) => s.content).join("");
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: lastContent,
+        segments: [...segments],
+      };
+      if (msgs[msgs.length - 1]?.role === "assistant") {
+        return [...msgs.slice(0, -1), assistantMsg];
+      }
+      return [...msgs, assistantMsg];
+    };
+
+    const processEvent = (event: any) => {
+      if (event.type === "token") {
+        currentTextContent += event.content || "";
+        const lastSeg = segments[segments.length - 1];
+        if (lastSeg && lastSeg.type === "text") {
+          lastSeg.content = currentTextContent;
+        } else {
+          currentTextContent = event.content || "";
+          segments.push({ type: "text", content: currentTextContent });
+        }
+      } else if (event.type === "tool_start") {
+        currentTextContent = "";
+        segments.push({ type: "tool", tool: event.tool, args: event.args, status: "running" });
+        const toolActs = segments
+          .filter((s): s is StreamSegment & { type: "tool" } => s.type === "tool")
+          .map((s) => ({ tool: s.tool, args: s.args, output: s.output, status: s.status }));
+        setToolActivities(toolActs);
+        if (event.contextTokens != null) {
+          setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
+        }
+      } else if (event.type === "tool_end") {
+        for (let si = segments.length - 1; si >= 0; si--) {
+          const s = segments[si];
+          if (s.type === "tool" && s.tool === event.tool && s.status === "running") {
+            s.status = "done";
+            s.output = event.output;
+            break;
+          }
+        }
+        const toolActs = segments
+          .filter((s): s is StreamSegment & { type: "tool" } => s.type === "tool")
+          .map((s) => ({ tool: s.tool, args: s.args, output: s.output, status: s.status }));
+        setToolActivities(toolActs);
+        if (event.contextTokens != null) {
+          setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
+        }
+        if (event.tool === "edit" || event.tool === "write") {
+          setIframeKey((k) => k + 1);
+        }
+        if (event.tool === "preview_url" && event.output) {
+          const urlMatch = event.output.match(/https?:\/\/[^\s]+/);
+          if (urlMatch) setPreviewUrl(urlMatch[0]);
+        }
+      } else if (event.type === "result") {
+        currentTextContent = "";
+        const resultContent = event.content || "";
+        if (resultContent.trim()) {
+          const lastSeg = segments[segments.length - 1];
+          if (lastSeg && lastSeg.type === "text") {
+            lastSeg.content = resultContent;
+          } else {
+            segments.push({ type: "text", content: resultContent });
+          }
+        }
+        if (event.contextTokens != null && event.contextLimit != null) {
+          setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
+        }
+      } else if (event.type === "error") {
+        currentTextContent = "";
+        segments.push({ type: "text", content: `Error: ${event.content}` });
+      } else if (event.type === "aborted") {
+        currentTextContent = "";
+        segments.push({ type: "text", content: "Aborted." });
+      }
+
+      finalMessages = updateAssistantMsg(finalMessages);
+      setMessages(finalMessages);
+      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    };
+
+    // 1. Catch up: fetch any events that already landed before subscription
+    const { data: pastEvents } = await supabase
+      .from("agent_events")
+      .select("*")
+      .eq("job_id", jobId)
+      .order("id", { ascending: true });
+
+    let lastEventId = 0;
+    if (pastEvents) {
+      for (const row of pastEvents as any[]) {
+        processEvent(row.data);
+        lastEventId = row.id;
+      }
+    }
+
+    // Helper to tear down subscription and reset loading
+    const cleanup = () => {
+      if (realtimeChannelRef.current) {
+        supabase.removeChannel(realtimeChannelRef.current);
+        realtimeChannelRef.current = null;
+      }
+      currentJobIdRef.current = null;
+      setLoading(false);
+      setToolActivities([]);
+    };
+
+    // 2. Subscribe to new events + job status changes
+    const channel = supabase
+      .channel(`job-${jobId}`)
+      .on(
+        "postgres_changes" as any,
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "agent_events",
+          filter: `job_id=eq.${jobId}`,
+        },
+        (payload: any) => {
+          const row = payload.new;
+          if (row.id <= lastEventId) return; // already processed via catch-up
+          lastEventId = row.id;
+          processEvent(row.data);
+        }
+      )
+      .on(
+        "postgres_changes" as any,
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "agent_jobs",
+          filter: `id=eq.${jobId}`,
+        },
+        (payload: any) => {
+          const status = payload.new?.status;
+          if (status === "completed" || status === "failed" || status === "aborted") {
+            cleanup();
+          }
+        }
+      )
+      .subscribe();
+
+    realtimeChannelRef.current = channel;
+
+    // Safety: also check job status now in case it completed before we subscribed
+    const { data: jobRow } = await supabase
+      .from("agent_jobs")
+      .select("status")
+      .eq("id", jobId)
+      .maybeSingle();
+    if (jobRow && ((jobRow as any).status === "completed" || (jobRow as any).status === "failed" || (jobRow as any).status === "aborted")) {
+      cleanup();
+    }
+  }, []);
 
   const handleSend = useCallback(async (extraUploads?: UploadedFile[]) => {
     const text = input.trim();
@@ -359,160 +558,36 @@ export function useProject(projectId: string) {
     }
 
     setInput("");
-    // Show the clean text to the user (without upload prefixes)
     const nextMessages: ChatMessage[] = [...messages, { role: "user", content: text }];
     setMessages(nextMessages);
     setLoading(true);
     setToolActivities([]);
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 30);
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    // Build interleaved segments during streaming
-    let segments: StreamSegment[] = [];
-    let currentTextContent = ""; // accumulates token chunks for the current text segment
-
-    /** Helper: update the assistant message in the messages array with current segments */
-    const updateAssistantMsg = (msgs: ChatMessage[]) => {
-      const lastContent = segments.filter((s) => s.type === "text").map((s) => s.content).join("");
-      const assistantMsg: ChatMessage = {
-        role: "assistant",
-        content: lastContent,
-        segments: [...segments],
-      };
-      // Replace existing assistant msg or add new one
-      if (msgs[msgs.length - 1]?.role === "assistant") {
-        return [...msgs.slice(0, -1), assistantMsg];
-      }
-      return [...msgs, assistantMsg];
-    };
-
     try {
       const headers = await getAuthHeaders();
       const res = await fetch(`${API}/api/projects/${projectId}/chat`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ message: agentMessage, model: selectedModel }),
-        signal: controller.signal,
+        body: JSON.stringify({ message: agentMessage, model: selectedModel, worktreeId: "main" }),
       });
-
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No stream");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalMessages = nextMessages;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-
-            if (event.type === "token") {
-              currentTextContent += event.content || "";
-              // Update or create the current text segment
-              const lastSeg = segments[segments.length - 1];
-              if (lastSeg && lastSeg.type === "text") {
-                lastSeg.content = currentTextContent;
-              } else {
-                // New text segment (after tool calls or at start)
-                currentTextContent = event.content || "";
-                segments.push({ type: "text", content: currentTextContent });
-              }
-              finalMessages = updateAssistantMsg(finalMessages);
-              setMessages(finalMessages);
-            } else if (event.type === "tool_start") {
-              // Finalize any current text segment before adding tool
-              currentTextContent = "";
-              const toolSeg: StreamSegment = { type: "tool", tool: event.tool, args: event.args, status: "running" };
-              segments.push(toolSeg);
-              // Also update legacy toolActivities for the loading spinner area
-              const toolActivitiesFromSegments = segments
-                .filter((s): s is StreamSegment & { type: "tool" } => s.type === "tool")
-                .map((s) => ({ tool: s.tool, args: s.args, output: s.output, status: s.status }));
-              setToolActivities(toolActivitiesFromSegments);
-              finalMessages = updateAssistantMsg(finalMessages);
-              setMessages(finalMessages);
-              if (event.contextTokens != null) {
-                setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
-              }
-            } else if (event.type === "tool_end") {
-              // Find the matching running tool segment and update it
-              for (let si = segments.length - 1; si >= 0; si--) {
-                const s = segments[si];
-                if (s.type === "tool" && s.tool === event.tool && s.status === "running") {
-                  s.status = "done";
-                  s.output = event.output;
-                  break;
-                }
-              }
-              const toolActivitiesFromSegments = segments
-                .filter((s): s is StreamSegment & { type: "tool" } => s.type === "tool")
-                .map((s) => ({ tool: s.tool, args: s.args, output: s.output, status: s.status }));
-              setToolActivities(toolActivitiesFromSegments);
-              finalMessages = updateAssistantMsg(finalMessages);
-              setMessages(finalMessages);
-              if (event.contextTokens != null) {
-                setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
-              }
-              if (event.tool === "edit" || event.tool === "write") {
-                setIframeKey((k) => k + 1);
-              }
-              if (event.tool === "preview_url" && event.output) {
-                const urlMatch = event.output.match(/https?:\/\/[^\s]+/);
-                if (urlMatch) setPreviewUrl(urlMatch[0]);
-              }
-            } else if (event.type === "result") {
-              // Final result — add or update the final text segment
-              currentTextContent = "";
-              const resultContent = event.content || "";
-              if (resultContent.trim()) {
-                const lastSeg = segments[segments.length - 1];
-                if (lastSeg && lastSeg.type === "text") {
-                  lastSeg.content = resultContent;
-                } else {
-                  segments.push({ type: "text", content: resultContent });
-                }
-              }
-              finalMessages = updateAssistantMsg(finalMessages);
-              setMessages(finalMessages);
-              if (event.contextTokens != null && event.contextLimit != null) {
-                setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
-              }
-            } else if (event.type === "error") {
-              currentTextContent = "";
-              segments.push({ type: "text", content: `Error: ${event.content}` });
-              finalMessages = updateAssistantMsg(finalMessages);
-              setMessages(finalMessages);
-            }
-          } catch {
-            // skip malformed lines
-          }
-          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-        }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || "Failed to start agent");
       }
+      const { jobId } = await res.json();
+      if (!jobId) throw new Error("No jobId returned");
+
+      await subscribeToJob(jobId, nextMessages);
     } catch (err: any) {
-      if (err.name !== "AbortError") {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: "Failed to connect to backend" },
-        ]);
-      }
-    } finally {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Error: ${err.message}` },
+      ]);
       setLoading(false);
       setToolActivities([]);
-      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     }
-  }, [input, loading, messages, pendingUploads, projectId, selectedModel]);
+  }, [input, loading, messages, pendingUploads, projectId, selectedModel, subscribeToJob]);
 
   const saveLayout = useCallback(async (layout: any) => {
     try {
