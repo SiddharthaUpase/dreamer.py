@@ -243,8 +243,11 @@ export default function ChatPanel({
             <div ref={messagesEndRef} />
           </Box>
 
+          {/* Agent running indicator */}
+          {loading && <AgentRunningIndicator />}
+
           {/* Input at bottom */}
-          <Box sx={{ px: 2, pt: 1, pb: 1, borderTop: "1px solid", borderColor: "divider" }}>
+          <Box sx={{ px: 2, pt: 1, pb: 1, borderTop: loading ? "none" : "1px solid", borderColor: "divider" }}>
             <ChatInput
               input={input} setInput={setInput} loading={loading} uploadingFiles={uploadingFiles}
               stagedFiles={stagedFiles} filePreviews={filePreviews}
@@ -327,6 +330,69 @@ function ModelSelector({ selectedModel, setSelectedModel, disabled }: { selected
           </MenuItem>
         ))}
       </Select>
+    </Box>
+  );
+}
+
+// ===== Agent running indicator =====
+
+const AGENT_MESSAGES = [
+  "Working on it...",
+  "Thinking through this...",
+  "Making progress...",
+  "Almost there...",
+  "Writing code...",
+  "Figuring things out...",
+  "Putting it together...",
+  "Doing the work...",
+  "Crunching away...",
+  "On it...",
+  "Building your idea...",
+  "Crafting a solution...",
+];
+
+function AgentRunningIndicator() {
+  const [msgIndex, setMsgIndex] = useState(() => Math.floor(Math.random() * AGENT_MESSAGES.length));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMsgIndex((prev) => {
+        let next = prev;
+        while (next === prev) next = Math.floor(Math.random() * AGENT_MESSAGES.length);
+        return next;
+      });
+    }, 3500);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <Box
+      sx={{
+        px: 2, py: 0.6,
+        borderTop: "1px solid", borderColor: "divider",
+        display: "flex", alignItems: "center", gap: 0.75,
+        bgcolor: "rgba(139, 105, 20, 0.04)",
+      }}
+    >
+      <Box
+        sx={{
+          width: 6, height: 6, borderRadius: "50%",
+          bgcolor: "#22C55E",
+          animation: "pulse 1.5s ease-in-out infinite",
+          "@keyframes pulse": {
+            "0%, 100%": { opacity: 1, transform: "scale(1)" },
+            "50%": { opacity: 0.4, transform: "scale(0.8)" },
+          },
+        }}
+      />
+      <Typography
+        sx={{
+          fontSize: "0.8rem", color: "text.secondary", fontWeight: 500,
+          transition: "opacity 0.3s ease",
+        }}
+      >
+        {AGENT_MESSAGES[msgIndex]}
+      </Typography>
     </Box>
   );
 }
