@@ -780,9 +780,8 @@ export async function runAgentStream(
   previewUrl?: string,
   dbConfig?: DatabaseConfig,
   deployConfig?: DeployConfig,
-  openRouterKey?: string,
 ): Promise<AgentResult> {
-  const models = openRouterKey ? buildModelFactory(openRouterKey) : AVAILABLE_MODELS;
+  const models = AVAILABLE_MODELS;
   const createModel = models[modelId] || models["claude-sonnet"];
   const model = createModel();
   const subagentConfig: SubagentConfig = {

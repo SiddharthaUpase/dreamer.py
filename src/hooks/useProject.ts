@@ -3,15 +3,21 @@
 import { useRef, useCallback, useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 
+export type StreamSegment =
+  | { type: "text"; content: string }
+  | { type: "tool"; tool: string; args?: Record<string, unknown>; output?: string; status: "running" | "done" };
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
-  tools?: ToolActivity[];
+  segments?: StreamSegment[];
 }
 
+// Legacy alias for components that reference this type
 export interface ToolActivity {
   tool: string;
   args?: Record<string, unknown>;
+  output?: string;
   status: "running" | "done";
 }
 
@@ -52,15 +58,13 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   const supabase = createClient();
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
-  const openRouterKey = typeof window !== "undefined" ? localStorage.getItem("openrouter_key") : null;
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(openRouterKey ? { "X-OpenRouter-Key": openRouterKey } : {}),
   };
 }
 
-// Convert DB messages (human/ai/tool) to frontend ChatMessages (user/assistant with tools)
+// Convert DB messages (human/ai/tool) to frontend ChatMessages with interleaved segments
 function dbMessagesToChat(dbMessages: any[]): ChatMessage[] {
   const chatMessages: ChatMessage[] = [];
   let i = 0;
@@ -72,20 +76,30 @@ function dbMessagesToChat(dbMessages: any[]): ChatMessage[] {
       chatMessages.push({ role: "user", content: msg.content });
       i++;
     } else if (msg.role === "ai") {
-      // Check if this AI message has tool_calls — if so, collect the tool chain
+      // Check if this AI message has tool_calls — if so, collect interleaved segments
       if (msg.tool_calls && msg.tool_calls.length > 0) {
-        const tools: ToolActivity[] = [];
+        const segments: StreamSegment[] = [];
 
         // Walk forward through ai+tool pairs until we hit a final ai (no tool_calls)
         let j = i;
         while (j < dbMessages.length) {
           const current = dbMessages[j];
           if (current.role === "ai" && current.tool_calls?.length > 0) {
+            // Add reasoning text as a text segment if present
+            if (current.content && current.content.trim()) {
+              segments.push({ type: "text", content: current.content });
+            }
+            // Add each tool call as a tool segment
             for (const tc of current.tool_calls) {
-              tools.push({ tool: tc.name, args: tc.args, status: "done" });
+              segments.push({ type: "tool", tool: tc.name, args: tc.args, status: "done" });
             }
             j++;
           } else if (current.role === "tool") {
+            // Match tool output to the last tool segment
+            const lastTool = [...segments].reverse().find((s) => s.type === "tool" && !("output" in s && s.output));
+            if (lastTool && lastTool.type === "tool") {
+              lastTool.output = current.content?.slice(0, 200);
+            }
             j++;
           } else {
             break;
@@ -93,22 +107,22 @@ function dbMessagesToChat(dbMessages: any[]): ChatMessage[] {
         }
 
         // j now points to the final AI message (with content, no tool_calls)
+        let finalContent = "";
         if (j < dbMessages.length && dbMessages[j].role === "ai") {
-          chatMessages.push({
-            role: "assistant",
-            content: dbMessages[j].content || "",
-            tools: tools.length > 0 ? tools : undefined,
-          });
-          i = j + 1;
-        } else {
-          // No final AI message found, show what we have
-          chatMessages.push({
-            role: "assistant",
-            content: msg.content || "",
-            tools: tools.length > 0 ? tools : undefined,
-          });
-          i = j;
+          finalContent = dbMessages[j].content || "";
+          // Add final text as a segment too
+          if (finalContent.trim()) {
+            segments.push({ type: "text", content: finalContent });
+          }
+          j++;
         }
+
+        chatMessages.push({
+          role: "assistant",
+          content: finalContent,
+          segments: segments.length > 0 ? segments : undefined,
+        });
+        i = j;
       } else {
         // Plain AI message (no tool calls) — just text
         chatMessages.push({ role: "assistant", content: msg.content });
@@ -325,7 +339,24 @@ export function useProject(projectId: string) {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    let runTools: ToolActivity[] = [];
+    // Build interleaved segments during streaming
+    let segments: StreamSegment[] = [];
+    let currentTextContent = ""; // accumulates token chunks for the current text segment
+
+    /** Helper: update the assistant message in the messages array with current segments */
+    const updateAssistantMsg = (msgs: ChatMessage[]) => {
+      const lastContent = segments.filter((s) => s.type === "text").map((s) => s.content).join("");
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: lastContent,
+        segments: [...segments],
+      };
+      // Replace existing assistant msg or add new one
+      if (msgs[msgs.length - 1]?.role === "assistant") {
+        return [...msgs.slice(0, -1), assistantMsg];
+      }
+      return [...msgs, assistantMsg];
+    };
 
     try {
       const headers = await getAuthHeaders();
@@ -342,8 +373,6 @@ export function useProject(projectId: string) {
       const decoder = new TextDecoder();
       let buffer = "";
       let finalMessages = nextMessages;
-      let streamingContent = ""; // Accumulates token chunks for live display
-      let isStreaming = false;   // Whether we're in a token-streaming phase
 
       while (true) {
         const { done, value } = await reader.read();
@@ -359,44 +388,49 @@ export function useProject(projectId: string) {
             const event = JSON.parse(line.slice(6));
 
             if (event.type === "token") {
-              streamingContent += event.content || "";
-              if (!isStreaming) {
-                isStreaming = true;
-                // Add a new streaming assistant message
-                finalMessages = [...finalMessages, {
-                  role: "assistant" as const,
-                  content: streamingContent,
-                  tools: runTools.length > 0 ? [...runTools] : undefined,
-                }];
+              currentTextContent += event.content || "";
+              // Update or create the current text segment
+              const lastSeg = segments[segments.length - 1];
+              if (lastSeg && lastSeg.type === "text") {
+                lastSeg.content = currentTextContent;
               } else {
-                // Update the last message in place
-                finalMessages = [
-                  ...finalMessages.slice(0, -1),
-                  {
-                    role: "assistant" as const,
-                    content: streamingContent,
-                    tools: runTools.length > 0 ? [...runTools] : undefined,
-                  },
-                ];
+                // New text segment (after tool calls or at start)
+                currentTextContent = event.content || "";
+                segments.push({ type: "text", content: currentTextContent });
               }
+              finalMessages = updateAssistantMsg(finalMessages);
               setMessages(finalMessages);
             } else if (event.type === "tool_start") {
-              // If we were streaming text, finalize that message before tool calls
-              if (isStreaming) {
-                isStreaming = false;
-                streamingContent = "";
-              }
-              const newTool: ToolActivity = { tool: event.tool, args: event.args, status: "running" };
-              runTools = [...runTools, newTool];
-              setToolActivities([...runTools]);
+              // Finalize any current text segment before adding tool
+              currentTextContent = "";
+              const toolSeg: StreamSegment = { type: "tool", tool: event.tool, args: event.args, status: "running" };
+              segments.push(toolSeg);
+              // Also update legacy toolActivities for the loading spinner area
+              const toolActivitiesFromSegments = segments
+                .filter((s): s is StreamSegment & { type: "tool" } => s.type === "tool")
+                .map((s) => ({ tool: s.tool, args: s.args, output: s.output, status: s.status }));
+              setToolActivities(toolActivitiesFromSegments);
+              finalMessages = updateAssistantMsg(finalMessages);
+              setMessages(finalMessages);
               if (event.contextTokens != null) {
                 setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
               }
             } else if (event.type === "tool_end") {
-              runTools = runTools.map((t) =>
-                t.tool === event.tool && t.status === "running" ? { ...t, status: "done" } : t
-              );
-              setToolActivities([...runTools]);
+              // Find the matching running tool segment and update it
+              for (let si = segments.length - 1; si >= 0; si--) {
+                const s = segments[si];
+                if (s.type === "tool" && s.tool === event.tool && s.status === "running") {
+                  s.status = "done";
+                  s.output = event.output;
+                  break;
+                }
+              }
+              const toolActivitiesFromSegments = segments
+                .filter((s): s is StreamSegment & { type: "tool" } => s.type === "tool")
+                .map((s) => ({ tool: s.tool, args: s.args, output: s.output, status: s.status }));
+              setToolActivities(toolActivitiesFromSegments);
+              finalMessages = updateAssistantMsg(finalMessages);
+              setMessages(finalMessages);
               if (event.contextTokens != null) {
                 setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
               }
@@ -408,31 +442,26 @@ export function useProject(projectId: string) {
                 if (urlMatch) setPreviewUrl(urlMatch[0]);
               }
             } else if (event.type === "result") {
-              // Final result replaces any streaming message with the complete content
-              isStreaming = false;
-              streamingContent = "";
-              // Remove any in-progress streaming message before adding the final one
-              const base = finalMessages[finalMessages.length - 1]?.role === "assistant"
-                ? finalMessages.slice(0, -1)
-                : finalMessages;
-              const assistantMsg: ChatMessage = {
-                role: "assistant",
-                content: event.content || "",
-                tools: runTools.length > 0 ? [...runTools] : undefined,
-              };
-              finalMessages = [...base, assistantMsg];
+              // Final result — add or update the final text segment
+              currentTextContent = "";
+              const resultContent = event.content || "";
+              if (resultContent.trim()) {
+                const lastSeg = segments[segments.length - 1];
+                if (lastSeg && lastSeg.type === "text") {
+                  lastSeg.content = resultContent;
+                } else {
+                  segments.push({ type: "text", content: resultContent });
+                }
+              }
+              finalMessages = updateAssistantMsg(finalMessages);
               setMessages(finalMessages);
               if (event.contextTokens != null && event.contextLimit != null) {
                 setContextInfo({ tokens: event.contextTokens, limit: event.contextLimit });
               }
             } else if (event.type === "error") {
-              isStreaming = false;
-              streamingContent = "";
-              const errMsg: ChatMessage = {
-                role: "assistant",
-                content: `Error: ${event.content}`,
-              };
-              finalMessages = [...finalMessages, errMsg];
+              currentTextContent = "";
+              segments.push({ type: "text", content: `Error: ${event.content}` });
+              finalMessages = updateAssistantMsg(finalMessages);
               setMessages(finalMessages);
             }
           } catch {

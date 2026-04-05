@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import TextField from "@mui/material/TextField";
@@ -10,6 +10,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
+import Collapse from "@mui/material/Collapse";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
@@ -21,24 +22,67 @@ import EditNoteIcon from "@mui/icons-material/EditNote";
 import SearchIcon from "@mui/icons-material/Search";
 import BuildIcon from "@mui/icons-material/Build";
 import LanguageIcon from "@mui/icons-material/Language";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ChatMessage, ToolActivity, ContextInfo } from "@/hooks/useProject";
+import type { ChatMessage, ToolActivity, ContextInfo, StreamSegment } from "@/hooks/useProject";
 import { MODEL_PRESETS, CUSTOM_MODELS } from "@/hooks/useProject";
 
+// Friendly labels + contextual descriptions for non-tech users
 const TOOL_META: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
-  bash:         { icon: <TerminalIcon    sx={{ fontSize: 11 }} />, label: "Bash",        color: "#16A34A" },
-  read:         { icon: <DescriptionIcon sx={{ fontSize: 11 }} />, label: "Read",        color: "#2563EB" },
-  write:        { icon: <EditNoteIcon    sx={{ fontSize: 11 }} />, label: "Write",       color: "#D97706" },
-  edit:         { icon: <EditNoteIcon    sx={{ fontSize: 11 }} />, label: "Edit",        color: "#EA580C" },
-  grep:         { icon: <SearchIcon      sx={{ fontSize: 11 }} />, label: "Grep",        color: "#7C3AED" },
-  glob:         { icon: <SearchIcon      sx={{ fontSize: 11 }} />, label: "Glob",        color: "#6D28D9" },
-  preview_url:  { icon: <LanguageIcon    sx={{ fontSize: 11 }} />, label: "Preview URL", color: "#0891B2" },
-  start_server: { icon: <TerminalIcon    sx={{ fontSize: 11 }} />, label: "Start Server",color: "#16A34A" },
+  bash:         { icon: <TerminalIcon    sx={{ fontSize: 13 }} />, label: "Running command",    color: "#16A34A" },
+  read:         { icon: <DescriptionIcon sx={{ fontSize: 13 }} />, label: "Reading file",       color: "#2563EB" },
+  write:        { icon: <EditNoteIcon    sx={{ fontSize: 13 }} />, label: "Creating file",      color: "#D97706" },
+  edit:         { icon: <EditNoteIcon    sx={{ fontSize: 13 }} />, label: "Editing file",       color: "#EA580C" },
+  grep:         { icon: <SearchIcon      sx={{ fontSize: 13 }} />, label: "Searching code",     color: "#7C3AED" },
+  glob:         { icon: <SearchIcon      sx={{ fontSize: 13 }} />, label: "Finding files",      color: "#6D28D9" },
+  preview_url:  { icon: <LanguageIcon    sx={{ fontSize: 13 }} />, label: "Opening preview",    color: "#0891B2" },
+  start_server: { icon: <TerminalIcon    sx={{ fontSize: 13 }} />, label: "Starting server",    color: "#16A34A" },
+  run_sql:      { icon: <BuildIcon       sx={{ fontSize: 13 }} />, label: "Querying database",  color: "#0891B2" },
+  web_search:   { icon: <SearchIcon      sx={{ fontSize: 13 }} />, label: "Searching the web",  color: "#7C3AED" },
+  url_fetch:    { icon: <LanguageIcon    sx={{ fontSize: 13 }} />, label: "Fetching page",      color: "#0891B2" },
 };
 
 function getToolMeta(name: string) {
-  return TOOL_META[name] || { icon: <BuildIcon sx={{ fontSize: 11 }} />, label: name, color: "#71717A" };
+  return TOOL_META[name] || { icon: <BuildIcon sx={{ fontSize: 13 }} />, label: name, color: "#71717A" };
+}
+
+/** Build a specific, human-readable description of what the tool is doing */
+function describeToolAction(tool: string, args?: Record<string, unknown>): string {
+  if (!args) return "";
+  if (tool === "bash" && args.command) {
+    const cmd = String(args.command);
+    return cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
+  }
+  if (tool === "read" && args.file_path) {
+    const p = String(args.file_path);
+    return p.split("/").pop() || p;
+  }
+  if (tool === "write" && args.file_path) {
+    const p = String(args.file_path);
+    return p.split("/").pop() || p;
+  }
+  if (tool === "edit" && args.file_path) {
+    const p = String(args.file_path);
+    return p.split("/").pop() || p;
+  }
+  if (tool === "grep" && args.pattern) {
+    return `"${args.pattern}"` + (args.path ? ` in ${String(args.path).split("/").pop()}` : "");
+  }
+  if (tool === "glob" && args.pattern) return String(args.pattern);
+  if (tool === "run_sql" && args.query) {
+    const q = String(args.query);
+    return q.length > 50 ? q.slice(0, 47) + "..." : q;
+  }
+  if (tool === "web_search" && args.query) return String(args.query);
+  if (tool === "url_fetch" && args.url) {
+    const u = String(args.url);
+    return u.length > 50 ? u.slice(0, 47) + "..." : u;
+  }
+  const first = Object.values(args).find((v) => typeof v === "string");
+  return first ? String(first).slice(0, 60) : "";
 }
 
 interface Props {
@@ -65,21 +109,38 @@ export default function ChatPanel({
   messagesEndRef, onSend, onAbort, onClear, onCompact, onFileUpload,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
+
+  // When loading starts, scroll to bottom to create clean workspace
+  useEffect(() => {
+    if (loading && scrollContainerRef.current) {
+      const el = scrollContainerRef.current;
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
+  }, [loading]);
 
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {/* Messages */}
-      <Box sx={{ flex: 1, overflowY: "auto", px: 2, py: 2 }}>
-        {messages.length === 0 && (
+      <Box ref={scrollContainerRef} sx={{ flex: 1, overflowY: "auto", px: 2, py: 2 }}>
+        {messages.length === 0 && !loading && (
           <Typography variant="body2" sx={{ color: "text.secondary", textAlign: "center", mt: 4 }}>
             What do you want to build?
           </Typography>
         )}
         {messages.map((msg, i) => (
-          <MessageBubble key={i} role={msg.role} content={msg.content} tools={msg.tools} />
+          <MessageBubble key={i} msg={msg} isStreaming={loading && i === messages.length - 1} />
         ))}
-        {loading && <ToolActivityList activities={toolActivities} />}
+        {/* Show thinking indicator when loading but no assistant message yet */}
+        {loading && (messages.length === 0 || messages[messages.length - 1]?.role === "user") && (
+          <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 0.6, py: 0.5 }}>
+            <CircularProgress size={12} thickness={5} sx={{ color: "#71717A" }} />
+            <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.85rem" }}>Thinking...</Typography>
+          </Box>
+        )}
+        {/* Spacer to push content up when loading */}
+        {loading && <Box sx={{ minHeight: "30vh" }} />}
         <div ref={messagesEndRef} />
       </Box>
 
@@ -203,12 +264,10 @@ export default function ChatPanel({
 }
 
 function ModelSelector({ selectedModel, setSelectedModel, disabled }: { selectedModel: string; setSelectedModel: (v: string) => void; disabled: boolean }) {
-  // Check if current model matches a preset
   const activePreset = MODEL_PRESETS.find((p) => p.id === selectedModel);
 
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-      {/* Segmented toggle for lite / pro / max */}
       <Box
         sx={{
           display: "flex",
@@ -242,15 +301,12 @@ function ModelSelector({ selectedModel, setSelectedModel, disabled }: { selected
         ))}
       </Box>
 
-      {/* Custom model dropdown */}
       <Select
         size="small"
         value={activePreset ? "" : selectedModel}
         displayEmpty
         onChange={(e) => {
-          if (e.target.value) {
-            setSelectedModel(e.target.value);
-          }
+          if (e.target.value) setSelectedModel(e.target.value);
         }}
         disabled={disabled}
         renderValue={(value) => {
@@ -278,75 +334,205 @@ function ModelSelector({ selectedModel, setSelectedModel, disabled }: { selected
   );
 }
 
-function MessageBubble({ role, content, tools }: { role: string; content: string; tools?: ToolActivity[] }) {
-  const isUser = role === "user";
-  const [toolsOpen, setToolsOpen] = useState(false);
+// ===== Message rendering =====
 
-  return (
-    <Box sx={{ mb: 1.5, display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start" }}>
-      {!isUser && tools && tools.length > 0 && (
-        <Box onClick={() => setToolsOpen((v) => !v)} sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.4, cursor: "pointer", color: "text.secondary", "&:hover": { color: "text.primary" } }}>
-          <Typography variant="caption" sx={{ fontSize: "0.95rem", fontWeight: 500 }}>
-            {toolsOpen ? "▾" : "▸"} {tools.length} tool{tools.length !== 1 ? "s" : ""}
-          </Typography>
+const mdStyles = {
+  "& p": { m: 0, fontSize: "0.95rem", lineHeight: 1.55, "&:last-child": { mb: 0 } },
+  "& code": { fontFamily: 'var(--font-geist-mono), monospace', fontSize: "0.9rem", bgcolor: "rgba(0,0,0,0.07)", px: 0.5, borderRadius: 0.5 },
+  "& pre": { bgcolor: "rgba(0,0,0,0.06)", borderRadius: 1, p: 1, overflowX: "auto", "& code": { bgcolor: "transparent", px: 0, fontSize: "0.88rem" } },
+  "& a": { color: "primary.main" },
+  "& ul, & ol": { pl: 2, mb: 0.5 },
+  "& li": { fontSize: "0.95rem" },
+};
+
+function MessageBubble({ msg, isStreaming }: { msg: ChatMessage; isStreaming?: boolean }) {
+  const isUser = msg.role === "user";
+
+  if (isUser) {
+    return (
+      <Box sx={{ mb: 1.5, display: "flex", justifyContent: "flex-end" }}>
+        <Box
+          sx={{
+            maxWidth: "90%", px: 1.5, py: 1,
+            borderRadius: "12px 12px 3px 12px",
+            bgcolor: "primary.main", color: "#fff",
+            "& p": { m: 0, fontSize: "0.95rem", lineHeight: 1.55 },
+            "& code": { fontFamily: 'var(--font-geist-mono), monospace', fontSize: "0.9rem", bgcolor: "rgba(255,255,255,0.18)", px: 0.5, borderRadius: 0.5 },
+          }}
+        >
+          <Typography variant="body2" sx={{ fontSize: "0.95rem", lineHeight: 1.55 }}>{msg.content}</Typography>
         </Box>
-      )}
-      {!isUser && toolsOpen && tools && (
-        <Box sx={{ mb: 0.5, width: "100%", maxWidth: "90%" }}>
-          <ToolActivityList activities={tools} />
-        </Box>
-      )}
-      <Box
-        sx={{
-          maxWidth: "90%", px: 1.5, py: 1,
-          borderRadius: isUser ? "12px 12px 3px 12px" : "12px 12px 12px 3px",
-          bgcolor: isUser ? "primary.main" : "#F4F4F6",
-          color: isUser ? "#fff" : "text.primary",
-          "& p": { m: 0, fontSize: "0.95rem", lineHeight: 1.55, "&:last-child": { mb: 0 } },
-          "& code": { fontFamily: "monospace", fontSize: "0.9rem", bgcolor: isUser ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.07)", px: 0.5, borderRadius: 0.5 },
-          "& pre": { bgcolor: isUser ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)", borderRadius: 1, p: 1, overflowX: "auto", "& code": { bgcolor: "transparent", px: 0, fontSize: "0.88rem" } },
-          "& a": { color: isUser ? "#fff" : "primary.main" },
-          "& ul, & ol": { pl: 2, mb: 0.5 },
-          "& li": { fontSize: "0.95rem" },
-        }}
-      >
-        {isUser ? (
-          <Typography variant="body2" sx={{ fontSize: "0.95rem", lineHeight: 1.55 }}>{content}</Typography>
-        ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      </Box>
+    );
+  }
+
+  // Assistant message — render segments in order if available
+  if (msg.segments && msg.segments.length > 0) {
+    return (
+      <Box sx={{ mb: 1.5 }}>
+        {msg.segments.map((seg, i) => {
+          if (seg.type === "text") {
+            return (
+              <Box key={i} sx={{ maxWidth: "90%", px: 1.5, py: 1, mb: 0.5, borderRadius: "12px 12px 12px 3px", bgcolor: "#F4F4F6", ...mdStyles }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.content}</ReactMarkdown>
+              </Box>
+            );
+          }
+          // Tool segment
+          return <ToolCallItem key={i} activity={seg} isLive={!!isStreaming} />;
+        })}
+        {/* Show working indicator if last segment is a running tool */}
+        {isStreaming && msg.segments.length > 0 && msg.segments[msg.segments.length - 1].type === "tool" && (msg.segments[msg.segments.length - 1] as any).status === "running" && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, pl: 1, py: 0.3, mt: 0.2 }}>
+            <CircularProgress size={10} thickness={5} sx={{ color: "#71717A" }} />
+            <Typography sx={{ color: "text.secondary", fontSize: "0.8rem" }}>working...</Typography>
+          </Box>
         )}
+      </Box>
+    );
+  }
+
+  // Fallback: plain assistant message with no segments
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      <Box sx={{ maxWidth: "90%", px: 1.5, py: 1, borderRadius: "12px 12px 12px 3px", bgcolor: "#F4F4F6", ...mdStyles }}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
       </Box>
     </Box>
   );
 }
 
-function ToolActivityList({ activities }: { activities: ToolActivity[] }) {
-  if (activities.length === 0) {
-    return (
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.6, py: 0.4 }}>
-        <CircularProgress size={10} thickness={5} sx={{ color: "#71717A" }} />
-        <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.85rem" }}>Thinking...</Typography>
-      </Box>
-    );
-  }
+// ===== Tool call rendering =====
+
+function ToolCallItem({ activity, isLive }: { activity: StreamSegment & { type: "tool" } | ToolActivity; isLive: boolean }) {
+  const isRunning = activity.status === "running";
+  // Expanded while running (live), collapsed once done
+  const [expanded, setExpanded] = useState(isRunning && isLive);
+  const hasDetails = !!(activity.args || activity.output);
+  const meta = getToolMeta(activity.tool);
+  const description = describeToolAction(activity.tool, activity.args);
+
+  // Auto-expand when tool starts running during live stream
+  useEffect(() => {
+    if (isRunning && isLive) {
+      setExpanded(true);
+    }
+  }, [isRunning, isLive]);
+
+  // Auto-collapse all tools when the entire run completes (isLive goes false)
+  useEffect(() => {
+    if (!isLive && !isRunning) {
+      setExpanded(false);
+    }
+  }, [isLive, isRunning]);
+
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.3 }}>
-      {activities.map((a, i) => {
-        const meta = getToolMeta(a.tool);
-        const isRunning = a.status === "running";
-        return (
-          <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.75, py: 0.3, borderRadius: 1, bgcolor: `${meta.color}10`, opacity: isRunning ? 1 : 0.5 }}>
-            {isRunning ? <CircularProgress size={9} thickness={5} sx={{ color: meta.color }} /> : <Box sx={{ color: meta.color, display: "flex" }}>{meta.icon}</Box>}
-            <Typography variant="caption" sx={{ color: meta.color, fontSize: "0.95rem", fontWeight: 700, textTransform: "uppercase" }}>{meta.label}</Typography>
+    <Box
+      sx={{
+        maxWidth: "90%",
+        borderRadius: 2,
+        overflow: "hidden",
+        mb: 0.5,
+        bgcolor: isRunning ? `${meta.color}08` : "#FAFAFA",
+        border: "1px solid",
+        borderColor: isRunning ? `${meta.color}30` : "rgba(0,0,0,0.06)",
+        transition: "all 0.2s ease",
+        fontFamily: 'var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      }}
+    >
+      {/* Header row */}
+      <Box
+        onClick={() => hasDetails && setExpanded((v) => !v)}
+        sx={{
+          display: "flex", alignItems: "center", gap: 0.75,
+          px: 1.25, py: 0.6,
+          cursor: hasDetails ? "pointer" : "default",
+          "&:hover": hasDetails ? { bgcolor: "rgba(0,0,0,0.02)" } : {},
+        }}
+      >
+        {/* Status indicator */}
+        {isRunning ? (
+          <CircularProgress size={11} thickness={5} sx={{ color: meta.color, flexShrink: 0 }} />
+        ) : (
+          <CheckCircleIcon sx={{ fontSize: 13, color: "#22C55E", flexShrink: 0 }} />
+        )}
+
+        {/* Tool icon */}
+        <Box sx={{ color: meta.color, display: "flex", flexShrink: 0 }}>{meta.icon}</Box>
+
+        {/* Friendly label + specific description */}
+        <Typography sx={{ fontSize: "0.88rem", fontWeight: 600, color: "#2C2416", flexShrink: 0 }}>
+          {meta.label}
+        </Typography>
+        {description && (
+          <Typography
+            sx={{
+              fontSize: "0.84rem", color: "#6B6055", fontWeight: 400,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              flex: 1, minWidth: 0,
+            }}
+          >
+            {description}
+          </Typography>
+        )}
+
+        {/* Expand chevron */}
+        {hasDetails && (
+          <Box sx={{ flexShrink: 0, color: "#AAA", display: "flex" }}>
+            {expanded ? <ExpandLessIcon sx={{ fontSize: 15 }} /> : <ExpandMoreIcon sx={{ fontSize: 15 }} />}
           </Box>
-        );
-      })}
-      {activities.some((a) => a.status === "running") && (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.75, py: 0.3 }}>
-          <CircularProgress size={9} thickness={5} sx={{ color: "#71717A" }} />
-          <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.95rem" }}>working...</Typography>
+        )}
+      </Box>
+
+      {/* Expanded details */}
+      <Collapse in={expanded}>
+        <Box sx={{ borderTop: "1px solid", borderColor: "rgba(0,0,0,0.05)", px: 1.25, py: 0.75, bgcolor: "rgba(0,0,0,0.015)" }}>
+          {/* Args / Input */}
+          {activity.args && Object.keys(activity.args).length > 0 && (
+            <Box sx={{ mb: activity.output ? 0.75 : 0 }}>
+              <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#8A8078", textTransform: "uppercase", letterSpacing: "0.04em", mb: 0.3 }}>
+                Input
+              </Typography>
+              <Box
+                sx={{
+                  bgcolor: "rgba(0,0,0,0.03)", borderRadius: 1, px: 1, py: 0.5,
+                  maxHeight: 120, overflowY: "auto",
+                }}
+              >
+                {Object.entries(activity.args).map(([k, v]) => (
+                  <Box key={k} sx={{ mb: 0.2 }}>
+                    <Typography component="span" sx={{ fontSize: "0.8rem", fontFamily: 'var(--font-geist-mono), monospace', color: meta.color, fontWeight: 600 }}>
+                      {k}
+                    </Typography>
+                    <Typography component="span" sx={{ fontSize: "0.8rem", color: "#8A8078" }}>{": "}</Typography>
+                    <Typography component="span" sx={{ fontSize: "0.8rem", fontFamily: 'var(--font-geist-mono), monospace', color: "#3D3220", wordBreak: "break-all" }}>
+                      {typeof v === "string" ? v : JSON.stringify(v)}
+                    </Typography>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )}
+          {/* Output */}
+          {activity.output && (
+            <Box>
+              <Typography sx={{ fontSize: "0.72rem", fontWeight: 700, color: "#8A8078", textTransform: "uppercase", letterSpacing: "0.04em", mb: 0.3 }}>
+                Output
+              </Typography>
+              <Box
+                sx={{
+                  bgcolor: "rgba(0,0,0,0.03)", borderRadius: 1, px: 1, py: 0.5,
+                  fontFamily: 'var(--font-geist-mono), monospace', fontSize: "0.8rem", color: "#3D3220",
+                  whiteSpace: "pre-wrap", wordBreak: "break-all",
+                  maxHeight: 100, overflowY: "auto", lineHeight: 1.5,
+                }}
+              >
+                {activity.output}
+              </Box>
+            </Box>
+          )}
         </Box>
-      )}
+      </Collapse>
     </Box>
   );
 }

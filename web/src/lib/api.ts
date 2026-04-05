@@ -11,11 +11,6 @@ export function getHeaders(): Record<string, string> {
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
-
-    const openrouterKey = localStorage.getItem("openrouter_key");
-    if (openrouterKey) {
-      headers["X-OpenRouter-Key"] = openrouterKey;
-    }
   }
 
   return headers;
@@ -62,8 +57,6 @@ export async function apiUpload(path: string, file: File) {
   if (typeof window !== "undefined") {
     const token = localStorage.getItem("supabase_access_token");
     if (token) headers["Authorization"] = `Bearer ${token}`;
-    const openrouterKey = localStorage.getItem("openrouter_key");
-    if (openrouterKey) headers["X-OpenRouter-Key"] = openrouterKey;
   }
 
   const formData = new FormData();

@@ -15,10 +15,22 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         return;
       }
       localStorage.setItem("supabase_access_token", session.access_token);
-      const hasKey = !!localStorage.getItem("openrouter_key");
-      if (!hasKey && window.location.pathname !== "/setup") {
-        router.replace("/setup");
-        return;
+      // Check access via backend
+      const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://dreamer-py.onrender.com";
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/auth/access-status`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const data = await res.json();
+        if (!data.hasAccess && window.location.pathname !== "/setup") {
+          router.replace("/setup");
+          return;
+        }
+      } catch {
+        if (window.location.pathname !== "/setup") {
+          router.replace("/setup");
+          return;
+        }
       }
       setReady(true);
     });
