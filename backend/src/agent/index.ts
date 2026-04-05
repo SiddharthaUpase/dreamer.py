@@ -13,8 +13,8 @@ import type { ToolCall } from "@langchain/core/messages/tool";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { SandboxInstance } from "@blaxel/core";
 import { neon } from "@neondatabase/serverless";
-import { createTools, isImagePath, isPdfPath, getMimeType, type TodoItem, type DatabaseConfig, type SubagentConfig, type DeployConfig } from "./tools.js";
-export type { DatabaseConfig, DeployConfig } from "./tools.js";
+import { createTools, isImagePath, isPdfPath, getMimeType, type TodoItem, type DatabaseConfig, type SubagentConfig } from "./tools.js";
+export type { DatabaseConfig } from "./tools.js";
 import type { StoredMessage } from "../services/projectStore.js";
 
 // Injects cache_control into the request body for Anthropic prompt caching via OpenRouter.
@@ -779,7 +779,6 @@ export async function runAgentStream(
   signal?: AbortSignal,
   previewUrl?: string,
   dbConfig?: DatabaseConfig,
-  deployConfig?: DeployConfig,
 ): Promise<AgentResult> {
   const models = AVAILABLE_MODELS;
   const createModel = models[modelId] || models["claude-sonnet"];
@@ -794,7 +793,7 @@ export async function runAgentStream(
   };
   const tools = createTools(sandbox, (todos) => {
     onEvent({ type: "todo_update", todos });
-  }, dbConfig, subagentConfig, deployConfig, VISION_MODELS.has(modelId));
+  }, dbConfig, subagentConfig, VISION_MODELS.has(modelId));
   const toolsByName: Record<string, any> = {};
   for (const t of tools) toolsByName[t.name] = t;
   const modelWithTools = (model as any).bindTools(tools);

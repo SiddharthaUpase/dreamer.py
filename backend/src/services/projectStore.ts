@@ -18,6 +18,7 @@ export interface StoredProject {
   r2_token_id: string | null;
   r2_public_domain: string | null;
   layout: any | null;
+  deployed_url: string | null;
 }
 
 export interface StoredMessage {

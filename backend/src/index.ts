@@ -14,7 +14,6 @@ import {
   langChainToDbRow,
   sanitizeHistory,
   type DatabaseConfig,
-  type DeployConfig,
 } from "./agent/index.js";
 import { verifyUser, getUserByEmail } from "./services/supabase.js";
 import {
@@ -276,6 +275,7 @@ app.post("/api/projects", async (req: AuthRequest, res) => {
       r2_token_id: null,
       r2_public_domain: null,
       layout: null,
+      deployed_url: null,
     });
 
     // Provision resources (Neon DB + R2 bucket)
@@ -503,6 +503,7 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
       template: project.template,
       messages,
       layout: project.layout || null,
+      deployedUrl: project.deployed_url || null,
     });
   } catch (err: any) {
     console.error("Failed to connect:", err.message);
@@ -718,16 +719,6 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
       ? { connectionString: project.database_url }
       : undefined;
 
-    const envVars = await readSandboxEnvVars(sandbox);
-    const deployConfig: DeployConfig | undefined = process.env.VERCEL_TOKEN
-      ? {
-          projectName: `vas-${project.name}`,
-          vercelToken: process.env.VERCEL_TOKEN,
-          vercelTeamId: process.env.VERCEL_TEAM_ID || undefined,
-          envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
-        }
-      : undefined;
-
     // Check user has access (redeemed a starter code)
     const hasAccess = await checkUserAccess(req.userId!);
     if (!hasAccess) {
@@ -742,7 +733,6 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
       abortController.signal,
       project.preview_url || undefined,
       dbConfig,
-      deployConfig,
     );
 
     console.log(`\x1b[32m[chat]\x1b[0m agent done, ${result.newMessages.length} new messages, ${result.contextTokens} tokens`);
@@ -872,6 +862,16 @@ app.post("/api/projects/:id/deploy", async (req: AuthRequest, res) => {
     }, (msg) => {
       res.write(`data: ${JSON.stringify({ type: "status", message: msg })}\n\n`);
     });
+
+    // Persist the deployed URL on the project so the user can always reach the
+    // live site from the dashboard/IDE without having to re-deploy.
+    if (result.success && result.url) {
+      try {
+        await updateProject(pid, { deployed_url: result.url });
+      } catch (err: any) {
+        console.error(`[deploy] failed to persist deployed_url:`, err.message);
+      }
+    }
 
     res.write(`data: ${JSON.stringify({ type: "result", ...result })}\n\n`);
     res.end();
