@@ -211,7 +211,7 @@ export default function Dashboard() {
 
   return (
     <Box
-      sx={{ minHeight: "100vh", display: "flex", bgcolor: "background.default" }}
+      sx={{ height: "100vh", display: "flex", bgcolor: "background.default" }}
     >
       {/* Sidebar */}
       <Box
@@ -405,7 +405,7 @@ export default function Dashboard() {
       </Box>
 
       {/* Main content */}
-      <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto" }}>
+      <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
         {/* Top bar */}
         <Box
           sx={{
@@ -535,7 +535,7 @@ export default function Dashboard() {
         </Box>
 
         {/* Project grid */}
-        <Box sx={{ flex: 1, px: 4, py: 3.5 }}>
+        <Box sx={{ flex: 1, px: 4, py: 3.5, overflowY: "auto", minHeight: 0 }}>
           {loading ? (
             <Box
               sx={{
