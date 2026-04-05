@@ -10,40 +10,68 @@ import Button from "@mui/material/Button";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
+import Chip from "@mui/material/Chip";
+import CircularProgress from "@mui/material/CircularProgress";
 import CloseIcon from "@mui/icons-material/Close";
+import LanguageRoundedIcon from "@mui/icons-material/LanguageRounded";
+import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 
 const TEMPLATES = [
-  { id: "blank", label: "Blank", description: "Empty sandbox" },
-  { id: "nextjs", label: "Next.js", description: "App router starter" },
+  {
+    id: "nextjs",
+    label: "Web App",
+    description: "Full-stack Next.js starter with React, Tailwind CSS, and a database — perfect for most projects",
+    icon: LanguageRoundedIcon,
+    recommended: true,
+  },
+  {
+    id: "blank",
+    label: "Empty Project",
+    description: "A clean sandbox with Node.js, Python, and Git — set up everything yourself",
+    icon: TerminalRoundedIcon,
+    recommended: false,
+  },
 ];
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, template: string) => void;
+  onCreate: (name: string, template: string) => Promise<void> | void;
 }
 
 export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
   const [name, setName] = useState("");
-  const [template] = useState("nextjs");
+  const [template, setTemplate] = useState("nextjs");
   const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
 
-  function handleCreate() {
+  async function handleCreate() {
     const sanitized = name.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
     if (!sanitized) {
       setError("Name must contain letters or numbers");
       return;
     }
     setError("");
-    onCreate(sanitized, template);
+    setCreating(true);
+    try {
+      await onCreate(sanitized, template);
+    } catch {
+      setCreating(false);
+    }
+  }
+
+  function handleClose() {
+    if (creating) return;
     setName("");
+    setTemplate("nextjs");
+    setError("");
     onClose();
   }
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={handleClose}
       maxWidth="xs"
       fullWidth
       PaperProps={{
@@ -66,7 +94,7 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
         }}
       >
         New Project
-        <IconButton size="small" onClick={onClose} sx={{ color: "text.secondary" }}>
+        <IconButton size="small" onClick={handleClose} sx={{ color: "text.secondary" }}>
           <CloseIcon fontSize="small" />
         </IconButton>
       </DialogTitle>
@@ -84,7 +112,8 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           onChange={(e) => setName(e.target.value)}
           error={!!error}
           helperText={error || "Lowercase letters, numbers, and hyphens only"}
-          onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+          disabled={creating}
+          onKeyDown={(e) => e.key === "Enter" && !creating && handleCreate()}
           sx={{
             mt: 0.5,
             mb: 2.5,
@@ -94,6 +123,90 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           }}
         />
 
+        <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 500, display: "block", mb: 1 }}>
+          Project type
+        </Typography>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+          {TEMPLATES.map((t) => {
+            const Icon = t.icon;
+            const selected = template === t.id;
+            return (
+              <Box
+                key={t.id}
+                onClick={() => !creating && setTemplate(t.id)}
+                sx={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 1.5,
+                  p: 1.5,
+                  borderRadius: 2,
+                  border: "2px solid",
+                  borderColor: selected ? "primary.main" : "divider",
+                  bgcolor: selected ? "rgba(99, 102, 241, 0.04)" : "transparent",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
+                  "&:hover": {
+                    borderColor: selected ? "primary.main" : "text.secondary",
+                    bgcolor: selected ? "rgba(99, 102, 241, 0.04)" : "action.hover",
+                  },
+                }}
+              >
+                <Box
+                  sx={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 1.5,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    bgcolor: selected ? "primary.main" : "action.hover",
+                    color: selected ? "#fff" : "text.secondary",
+                    flexShrink: 0,
+                    mt: 0.25,
+                  }}
+                >
+                  <Icon sx={{ fontSize: 20 }} />
+                </Box>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <Typography
+                      variant="body2"
+                      fontWeight={600}
+                      sx={{ color: "text.primary", fontSize: "0.85rem" }}
+                    >
+                      {t.label}
+                    </Typography>
+                    {t.recommended && (
+                      <Chip
+                        label="Recommended"
+                        size="small"
+                        sx={{
+                          height: 18,
+                          fontSize: "0.6rem",
+                          fontWeight: 700,
+                          bgcolor: "primary.main",
+                          color: "#fff",
+                          "& .MuiChip-label": { px: 0.75 },
+                        }}
+                      />
+                    )}
+                  </Box>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: "text.secondary",
+                      lineHeight: 1.4,
+                      display: "block",
+                      mt: 0.25,
+                    }}
+                  >
+                    {t.description}
+                  </Typography>
+                </Box>
+              </Box>
+            );
+          })}
+        </Box>
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 2.5 }}>
@@ -101,11 +214,18 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           fullWidth
           variant="contained"
           disableElevation
-          disabled={!name.trim()}
+          disabled={!name.trim() || creating}
           onClick={handleCreate}
           sx={{ borderRadius: 2, py: 1, fontWeight: 600 }}
         >
-          Create Project →
+          {creating ? (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+              <CircularProgress size={16} sx={{ color: "inherit" }} />
+              Setting up project...
+            </Box>
+          ) : (
+            "Create Project"
+          )}
         </Button>
       </DialogActions>
     </Dialog>
