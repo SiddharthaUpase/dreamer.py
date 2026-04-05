@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import TextField from "@mui/material/TextField";
@@ -13,6 +13,9 @@ import MenuItem from "@mui/material/MenuItem";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
+import MicIcon from "@mui/icons-material/Mic";
+import CheckIcon from "@mui/icons-material/Check";
+import CloseIcon from "@mui/icons-material/Close";
 import CompressIcon from "@mui/icons-material/Compress";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import TerminalIcon from "@mui/icons-material/Terminal";
@@ -25,6 +28,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, ToolActivity, ContextInfo } from "@/hooks/useProject";
 import { MODEL_OPTIONS } from "@/hooks/useProject";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
 
 const TOOL_META: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
   bash:         { icon: <TerminalIcon    sx={{ fontSize: 11 }} />, label: "Bash",        color: "#16A34A" },
@@ -67,6 +71,20 @@ export default function ChatPanel({
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
+  const handleTranscript = useCallback((text: string) => {
+    setInput(input ? input + " " + text : text);
+  }, [setInput, input]);
+
+  const { voiceState, recordingDuration, startRecording, confirmRecording, cancelRecording } = useVoiceInput(handleTranscript);
+  const isRecording = voiceState === "recording";
+  const isTranscribing = voiceState === "transcribing";
+
+  const formatDuration = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {/* Messages */}
@@ -105,64 +123,113 @@ export default function ChatPanel({
             e.target.value = "";
           }}
         />
-        <TextField
-          fullWidth
-          size="small"
-          multiline
-          maxRows={4}
-          placeholder={dragOver ? "Drop file here..." : loading ? "Working..." : "Ask anything..."}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-          disabled={loading}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <IconButton
-                  size="small"
-                  onClick={() => fileRef.current?.click()}
-                  disabled={loading}
-                  sx={{ width: 26, height: 26, color: "text.secondary" }}
-                >
-                  <AttachFileIcon sx={{ fontSize: 14 }} />
+        {isRecording || isTranscribing ? (
+          /* ── Recording / Transcribing bar ── */
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              px: 1.5,
+              py: 1,
+              borderRadius: 2,
+              bgcolor: isRecording ? "#FEF2F2" : "#F8F8FA",
+              border: "1px solid",
+              borderColor: isRecording ? "#FECACA" : "divider",
+            }}
+          >
+            {isRecording && (
+              <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: "#EF4444", animation: "pulse 1.5s ease-in-out infinite", "@keyframes pulse": { "0%, 100%": { opacity: 1 }, "50%": { opacity: 0.4 } } }} />
+            )}
+            {isTranscribing && <CircularProgress size={14} thickness={5} />}
+            <Typography variant="body2" sx={{ flex: 1, fontSize: "0.95rem", color: "text.secondary" }}>
+              {isTranscribing ? "Transcribing..." : `Recording ${formatDuration(recordingDuration)}`}
+            </Typography>
+            {isRecording && (
+              <>
+                <IconButton size="small" onClick={cancelRecording} sx={{ width: 28, height: 28, color: "text.secondary", "&:hover": { bgcolor: "rgba(0,0,0,0.06)" } }}>
+                  <CloseIcon sx={{ fontSize: 16 }} />
                 </IconButton>
-              </InputAdornment>
-            ),
-            endAdornment: (
-              <InputAdornment position="end">
-                {loading ? (
-                  <IconButton size="small" onClick={onAbort} sx={{ width: 26, height: 26, color: "error.main" }}>
-                    <StopIcon sx={{ fontSize: 13 }} />
-                  </IconButton>
-                ) : (
+                <IconButton size="small" onClick={confirmRecording} sx={{ width: 28, height: 28, bgcolor: "#22C55E", color: "#fff", "&:hover": { bgcolor: "#16A34A" } }}>
+                  <CheckIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </>
+            )}
+          </Box>
+        ) : (
+          /* ── Normal text input ── */
+          <TextField
+            fullWidth
+            size="small"
+            multiline
+            maxRows={4}
+            placeholder={dragOver ? "Drop file here..." : loading ? "Working..." : "Ask anything..."}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onSend();
+              }
+            }}
+            disabled={loading}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
                   <IconButton
                     size="small"
-                    onClick={onSend}
-                    disabled={!input.trim()}
-                    sx={{
-                      bgcolor: input.trim() ? "primary.main" : "transparent",
-                      color: input.trim() ? "#fff" : "text.secondary",
-                      width: 26, height: 26,
-                      "&:hover": { bgcolor: input.trim() ? "primary.dark" : "transparent" },
-                    }}
+                    onClick={() => fileRef.current?.click()}
+                    disabled={loading}
+                    sx={{ width: 26, height: 26, color: "text.secondary" }}
                   >
-                    <SendIcon sx={{ fontSize: 13 }} />
+                    <AttachFileIcon sx={{ fontSize: 14 }} />
                   </IconButton>
-                )}
-              </InputAdornment>
-            ),
-          }}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              borderRadius: 2, bgcolor: "#F8F8FA", fontSize: "0.95rem",
-            },
-          }}
-        />
+                </InputAdornment>
+              ),
+              endAdornment: (
+                <InputAdornment position="end">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.25 }}>
+                    {!loading && (
+                      <Tooltip title="Voice input">
+                        <IconButton
+                          size="small"
+                          onClick={startRecording}
+                          sx={{ width: 26, height: 26, color: "text.secondary" }}
+                        >
+                          <MicIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {loading ? (
+                      <IconButton size="small" onClick={onAbort} sx={{ width: 26, height: 26, color: "error.main" }}>
+                        <StopIcon sx={{ fontSize: 13 }} />
+                      </IconButton>
+                    ) : (
+                      <IconButton
+                        size="small"
+                        onClick={onSend}
+                        disabled={!input.trim()}
+                        sx={{
+                          bgcolor: input.trim() ? "primary.main" : "transparent",
+                          color: input.trim() ? "#fff" : "text.secondary",
+                          width: 26, height: 26,
+                          "&:hover": { bgcolor: input.trim() ? "primary.dark" : "transparent" },
+                        }}
+                      >
+                        <SendIcon sx={{ fontSize: 13 }} />
+                      </IconButton>
+                    )}
+                  </Box>
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              "& .MuiOutlinedInput-root": {
+                borderRadius: 2, bgcolor: "#F8F8FA", fontSize: "0.95rem",
+              },
+            }}
+          />
+        )}
       </Box>
 
       {/* Context bar */}

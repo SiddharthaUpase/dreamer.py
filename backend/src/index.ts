@@ -813,6 +813,42 @@ app.post("/api/projects/:id/deploy", async (req: AuthRequest, res) => {
   }
 });
 
+// ===== Voice Transcription (Deepgram) =====
+
+app.post("/api/transcribe", upload.single("audio"), async (req: AuthRequest, res) => {
+  try {
+    const file = req.file;
+    if (!file) { res.status(400).json({ error: "No audio file provided" }); return; }
+
+    const dgApiKey = process.env.DEEPGRAM_API_KEY;
+    if (!dgApiKey) { res.status(500).json({ error: "Deepgram API key not configured" }); return; }
+
+    const dgRes = await fetch("https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true", {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${dgApiKey}`,
+        "Content-Type": file.mimetype || "audio/webm",
+      },
+      body: new Uint8Array(file.buffer),
+    });
+
+    if (!dgRes.ok) {
+      const errBody = await dgRes.text();
+      console.error("[transcribe] Deepgram error:", dgRes.status, errBody);
+      res.status(502).json({ error: "Transcription service error" });
+      return;
+    }
+
+    const result = await dgRes.json() as any;
+    const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
+
+    res.json({ text: transcript });
+  } catch (err: any) {
+    console.error("[transcribe] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===== Health =====
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
