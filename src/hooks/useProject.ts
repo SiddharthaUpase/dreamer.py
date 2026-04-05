@@ -151,7 +151,7 @@ export function useProject(projectId: string) {
   const [iframeKey, setIframeKey] = useState(0);
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus>("loading");
   const [sandboxError, setSandboxError] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState("claude-sonnet");
+  const [selectedModel, setSelectedModel] = useState("mimo");
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
   const [pendingUploads, setPendingUploads] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);

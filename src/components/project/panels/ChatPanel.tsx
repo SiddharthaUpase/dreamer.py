@@ -221,6 +221,8 @@ export default function ChatPanel({
               stagedFiles={stagedFiles} filePreviews={filePreviews}
               fileRef={fileRef} addFiles={addFiles} removeFile={removeFile}
               handleSendWithStagedFiles={handleSendWithStagedFiles} onAbort={onAbort}
+              onCompact={onCompact} onClear={onClear} compacting={compacting}
+              contextInfo={contextInfo} selectedModel={selectedModel} setSelectedModel={setSelectedModel}
             />
           </Box>
         </Box>
@@ -242,50 +244,18 @@ export default function ChatPanel({
           </Box>
 
           {/* Input at bottom */}
-          <Box sx={{ px: 2, pt: 1, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
+          <Box sx={{ px: 2, pt: 1, pb: 1, borderTop: "1px solid", borderColor: "divider" }}>
             <ChatInput
               input={input} setInput={setInput} loading={loading} uploadingFiles={uploadingFiles}
               stagedFiles={stagedFiles} filePreviews={filePreviews}
               fileRef={fileRef} addFiles={addFiles} removeFile={removeFile}
               handleSendWithStagedFiles={handleSendWithStagedFiles} onAbort={onAbort}
+              onCompact={onCompact} onClear={onClear} compacting={compacting}
+              contextInfo={contextInfo} selectedModel={selectedModel} setSelectedModel={setSelectedModel}
             />
           </Box>
         </>
       )}
-
-      {/* Context bar */}
-      <Box sx={{ px: 2, pb: 1, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-          {contextInfo && (
-            <>
-              <Box sx={{ width: 50, height: 3, bgcolor: "rgba(0,0,0,0.08)", borderRadius: 2, overflow: "hidden" }}>
-                <Box
-                  sx={{
-                    width: `${Math.min((contextInfo.tokens / contextInfo.limit) * 100, 100)}%`,
-                    height: "100%",
-                    borderRadius: 2,
-                    bgcolor: contextInfo.tokens / contextInfo.limit > 0.8 ? "#EF4444" : "#22C55E",
-                  }}
-                />
-              </Box>
-              <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.78rem" }}>
-                {Math.round(contextInfo.tokens / 1000)}k
-              </Typography>
-            </>
-          )}
-          <Tooltip title="Compact">
-            <IconButton size="small" onClick={onCompact} disabled={loading || compacting} sx={{ width: 18, height: 18, color: "text.secondary" }}>
-              {compacting ? <CircularProgress size={9} /> : <CompressIcon sx={{ fontSize: 12 }} />}
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Clear">
-            <IconButton size="small" onClick={onClear} disabled={loading} sx={{ width: 18, height: 18, color: "text.secondary" }}>
-              <DeleteOutlineIcon sx={{ fontSize: 12 }} />
-            </IconButton>
-          </Tooltip>
-        </Box>
-        <ModelSelector selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={loading} />
-      </Box>
     </Box>
   );
 }
@@ -364,7 +334,9 @@ function ModelSelector({ selectedModel, setSelectedModel, disabled }: { selected
 // ===== Chat input (shared between empty state and bottom bar) =====
 
 function ChatInput({
-  input, setInput, loading, uploadingFiles, stagedFiles, filePreviews, fileRef, addFiles, removeFile, handleSendWithStagedFiles, onAbort,
+  input, setInput, loading, uploadingFiles, stagedFiles, filePreviews, fileRef, addFiles, removeFile,
+  handleSendWithStagedFiles, onAbort, onCompact, onClear, compacting, contextInfo,
+  selectedModel, setSelectedModel,
 }: {
   input: string;
   setInput: (v: string) => void;
@@ -377,7 +349,16 @@ function ChatInput({
   removeFile: (i: number) => void;
   handleSendWithStagedFiles: () => void;
   onAbort: () => void;
+  onCompact: () => void;
+  onClear: () => void;
+  compacting: boolean;
+  contextInfo: ContextInfo | null;
+  selectedModel: string;
+  setSelectedModel: (v: string) => void;
 }) {
+  const [confirmCompact, setConfirmCompact] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
   return (
     <>
       {/* Staged file previews */}
@@ -505,6 +486,84 @@ function ChatInput({
           },
         }}
       />
+
+      {/* Controls bar — model selector, compact, clear */}
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 0.75 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+          {contextInfo && (
+            <>
+              <Box sx={{ width: 50, height: 3, bgcolor: "rgba(0,0,0,0.08)", borderRadius: 2, overflow: "hidden" }}>
+                <Box
+                  sx={{
+                    width: `${Math.min((contextInfo.tokens / contextInfo.limit) * 100, 100)}%`,
+                    height: "100%",
+                    borderRadius: 2,
+                    bgcolor: contextInfo.tokens / contextInfo.limit > 0.8 ? "#EF4444" : "#22C55E",
+                  }}
+                />
+              </Box>
+              <Typography variant="caption" sx={{ color: "text.secondary", fontSize: "0.78rem" }}>
+                {Math.round(contextInfo.tokens / 1000)}k
+              </Typography>
+            </>
+          )}
+
+          {/* Compact with confirmation */}
+          {confirmCompact ? (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.3 }}>
+              <Typography sx={{ fontSize: "0.72rem", color: "text.secondary" }}>Compact?</Typography>
+              <IconButton
+                size="small"
+                onClick={() => { onCompact(); setConfirmCompact(false); }}
+                sx={{ width: 16, height: 16, color: "#22C55E", fontSize: "0.7rem" }}
+              >
+                <Typography sx={{ fontSize: "0.7rem", fontWeight: 700 }}>Y</Typography>
+              </IconButton>
+              <IconButton
+                size="small"
+                onClick={() => setConfirmCompact(false)}
+                sx={{ width: 16, height: 16, color: "text.secondary", fontSize: "0.7rem" }}
+              >
+                <Typography sx={{ fontSize: "0.7rem", fontWeight: 700 }}>N</Typography>
+              </IconButton>
+            </Box>
+          ) : (
+            <Tooltip title="Compact history">
+              <IconButton size="small" onClick={() => setConfirmCompact(true)} disabled={loading || compacting} sx={{ width: 18, height: 18, color: "text.secondary" }}>
+                {compacting ? <CircularProgress size={9} /> : <CompressIcon sx={{ fontSize: 12 }} />}
+              </IconButton>
+            </Tooltip>
+          )}
+
+          {/* Clear with confirmation */}
+          {confirmClear ? (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.3 }}>
+              <Typography sx={{ fontSize: "0.72rem", color: "error.main" }}>Clear all?</Typography>
+              <IconButton
+                size="small"
+                onClick={() => { onClear(); setConfirmClear(false); }}
+                sx={{ width: 16, height: 16, color: "error.main", fontSize: "0.7rem" }}
+              >
+                <Typography sx={{ fontSize: "0.7rem", fontWeight: 700 }}>Y</Typography>
+              </IconButton>
+              <IconButton
+                size="small"
+                onClick={() => setConfirmClear(false)}
+                sx={{ width: 16, height: 16, color: "text.secondary", fontSize: "0.7rem" }}
+              >
+                <Typography sx={{ fontSize: "0.7rem", fontWeight: 700 }}>N</Typography>
+              </IconButton>
+            </Box>
+          ) : (
+            <Tooltip title="Clear chat">
+              <IconButton size="small" onClick={() => setConfirmClear(true)} disabled={loading} sx={{ width: 18, height: 18, color: "text.secondary" }}>
+                <DeleteOutlineIcon sx={{ fontSize: 12 }} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+        <ModelSelector selectedModel={selectedModel} setSelectedModel={setSelectedModel} disabled={loading} />
+      </Box>
     </>
   );
 }
