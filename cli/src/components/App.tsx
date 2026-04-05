@@ -16,7 +16,7 @@ const APP_URL = process.env.DREAMER_APP_URL || "https://dreamer-py.vercel.app";
 const require = createRequire(import.meta.url);
 const CURRENT_VERSION: string = require("../../package.json").version;
 
-type Screen = "loading" | "login" | "api-key" | "projects" | "chat";
+type Screen = "loading" | "login" | "starter-code" | "projects" | "chat";
 
 interface ProjectInfo {
   id: string;
@@ -24,17 +24,6 @@ interface ProjectInfo {
   previewUrl?: string;
   messageCount: number;
   messages: any[];
-}
-
-async function validateOpenRouterKey(key: string): Promise<boolean> {
-  try {
-    const res = await fetch("https://openrouter.ai/api/v1/models", {
-      headers: { Authorization: `Bearer ${key}` },
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
 }
 
 export function App() {
@@ -54,13 +43,14 @@ export function App() {
   useEffect(() => {
     const prefs = loadPrefs();
     if (prefs.apiKey) {
-      if (prefs.openRouterKey) {
-        setApi(new ApiClient(BACKEND_URL, prefs.apiKey, prefs.openRouterKey));
-        setScreen("projects");
-      } else {
-        setApi(new ApiClient(BACKEND_URL, prefs.apiKey));
-        setScreen("api-key");
-      }
+      const client = new ApiClient(BACKEND_URL, prefs.apiKey);
+      setApi(client);
+      // Check if user has access
+      client.checkAccess().then((hasAccess) => {
+        setScreen(hasAccess ? "projects" : "starter-code");
+      }).catch(() => {
+        setScreen("starter-code");
+      });
     } else {
       setScreen("login");
     }
@@ -95,30 +85,32 @@ export function App() {
     const prefs = loadPrefs();
     prefs.apiKey = apiKey;
     savePrefs(prefs);
-    setApi(new ApiClient(BACKEND_URL, apiKey));
-    // Check if they already have an OpenRouter key
-    if (prefs.openRouterKey) {
-      api?.setOpenRouterKey(prefs.openRouterKey);
-      setScreen("projects");
-    } else {
-      setScreen("api-key");
-    }
+    const client = new ApiClient(BACKEND_URL, apiKey);
+    setApi(client);
+    // Check if user already has access
+    client.checkAccess().then((hasAccess) => {
+      setScreen(hasAccess ? "projects" : "starter-code");
+    }).catch(() => {
+      setScreen("starter-code");
+    });
   };
 
-  const handleKeySubmit = async (key: string) => {
+  const handleKeySubmit = async (code: string) => {
+    if (!api) return;
     setKeyError("");
     setKeyValidating(true);
-    const valid = await validateOpenRouterKey(key);
-    setKeyValidating(false);
-    if (!valid) {
-      setKeyError("Invalid API key. Please check and try again.");
-      return;
+    try {
+      const result = await api.redeemStarterCode(code);
+      setKeyValidating(false);
+      if (!result.success) {
+        setKeyError(result.error || "Invalid starter code. Please check and try again.");
+        return;
+      }
+      setScreen("projects");
+    } catch {
+      setKeyValidating(false);
+      setKeyError("Failed to validate code. Please try again.");
     }
-    const prefs = loadPrefs();
-    prefs.openRouterKey = key;
-    savePrefs(prefs);
-    api?.setOpenRouterKey(key);
-    setScreen("projects");
   };
 
   const handleProjectSelect = (info: ProjectInfo) => {
@@ -152,7 +144,7 @@ export function App() {
 
   const handleUpdateKey = () => {
     setKeyError("");
-    setScreen("api-key");
+    setScreen("starter-code");
   };
 
   const logo = [
@@ -180,7 +172,7 @@ export function App() {
         </Box>
       )}
       {updateStatus === "restart" && (
-        <Text color="green">  ✔ Updated to v{latestVersion}. Please restart dreamer.</Text>
+        <Text color="green">  Updated to v{latestVersion}. Please restart dreamer.</Text>
       )}
       {updateStatus === "failed" && (
         <Text color="yellow">  Update available: v{latestVersion}. Run: <Text bold>npm i -g dreamer-py@latest</Text></Text>
@@ -199,7 +191,7 @@ export function App() {
         <LoginScreen backendUrl={BACKEND_URL} appUrl={APP_URL} onLogin={handleLogin} />
       )}
 
-      {screen === "api-key" && (
+      {screen === "starter-code" && (
         <KeyScreen onSubmit={handleKeySubmit} error={keyError} validating={keyValidating} />
       )}
 

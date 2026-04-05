@@ -40,6 +40,7 @@ import {
 } from "./services/provisioning.js";
 import { deploy } from "./services/deploy.js";
 import { createDeviceCode, pollDeviceCode, approveDeviceCode, verifyApiKey } from "./services/cliAuth.js";
+import { redeemStarterCode, checkUserAccess } from "./services/starterCode.js";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 
 // ===== Startup validation =====
@@ -218,6 +219,27 @@ app.post("/api/auth/cli/approve", async (req: AuthRequest, res) => {
   }
 
   res.json({ status: "approved", email: user.email });
+});
+
+// ===== Starter Code Redemption (requires auth) =====
+
+app.post("/api/auth/redeem-code", requireAuth, async (req: AuthRequest, res) => {
+  const { code } = req.body;
+  if (!code || typeof code !== "string") {
+    res.status(400).json({ error: "code is required" });
+    return;
+  }
+  const result = await redeemStarterCode(req.userId!, code);
+  if (!result.success) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ success: true });
+});
+
+app.get("/api/auth/access-status", requireAuth, async (req: AuthRequest, res) => {
+  const hasAccess = await checkUserAccess(req.userId!);
+  res.json({ hasAccess });
 });
 
 // Apply auth to all /api routes (below this line)
@@ -447,24 +469,25 @@ app.post("/api/projects/:id/connect", async (req: AuthRequest, res) => {
     await injectProjectEnv(sandbox, envData);
     await injectSkills(sandbox);
 
-    // Auto-start dev server for Next.js
+    // Auto-start dev server for Next.js (fire-and-forget, don't block response)
     if (project.template === "nextjs") {
-      try {
-        const check = await sandbox.process.exec({
-          command: "node -e \"const h=require('http');h.get('http://localhost:3000',r=>console.log(r.statusCode)).on('error',()=>console.log('down'))\"",
-          waitForCompletion: true,
-        });
-        if (!check.stdout?.includes("200") && !check.stdout?.includes("304")) {
-          await sandbox.process.exec({
-            name: "dev-server",
-            command: "npm run dev -- --port 3000",
-            workingDir: "/app",
-            restartOnFailure: true,
-            maxRestarts: 25,
+      (async () => {
+        try {
+          const check = await sandbox.process.exec({
+            command: "node -e \"const h=require('http');h.get('http://localhost:3000',r=>console.log(r.statusCode)).on('error',()=>console.log('down'))\"",
+            waitForCompletion: true,
           });
-          await new Promise((r) => setTimeout(r, 5000));
-        }
-      } catch { /* non-critical */ }
+          if (!check.stdout?.includes("200") && !check.stdout?.includes("304")) {
+            await sandbox.process.exec({
+              name: "dev-server",
+              command: "npm run dev -- --port 3000",
+              workingDir: "/app",
+              restartOnFailure: true,
+              maxRestarts: 25,
+            });
+          }
+        } catch { /* non-critical */ }
+      })();
     }
 
     const messages = await getProjectMessages(pid, req.userId!);
@@ -665,7 +688,13 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
         }
       : undefined;
 
-    const openRouterKey = req.headers["x-openrouter-key"] as string | undefined;
+    // Check user has access (redeemed a starter code)
+    const hasAccess = await checkUserAccess(req.userId!);
+    if (!hasAccess) {
+      res.write(`data: ${JSON.stringify({ type: "error", content: "No access. Please redeem a starter code at /setup." })}\n\n`);
+      res.end();
+      return;
+    }
 
     const result = await runAgentStream(
       sandbox, history, message, model || "claude-sonnet",
@@ -674,7 +703,6 @@ app.post("/api/projects/:id/chat", async (req: AuthRequest, res) => {
       project.preview_url || undefined,
       dbConfig,
       deployConfig,
-      openRouterKey,
     );
 
     console.log(`\x1b[32m[chat]\x1b[0m agent done, ${result.newMessages.length} new messages, ${result.contextTokens} tokens`);

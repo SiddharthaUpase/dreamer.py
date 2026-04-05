@@ -33,31 +33,40 @@ export interface DeployEvent {
 export class ApiClient {
   private baseUrl: string;
   private apiKey: string;
-  private openRouterKey: string;
 
-  constructor(baseUrlOrOpts: string | ApiClientOptions, apiKey?: string, openRouterKey?: string) {
+  constructor(baseUrlOrOpts: string | ApiClientOptions, apiKey?: string) {
     if (typeof baseUrlOrOpts === "string") {
       this.baseUrl = baseUrlOrOpts;
       this.apiKey = apiKey!;
-      this.openRouterKey = openRouterKey || "";
     } else {
       this.baseUrl = baseUrlOrOpts.baseUrl;
       this.apiKey = baseUrlOrOpts.apiKey;
-      this.openRouterKey = openRouterKey || "";
     }
-  }
-
-  setOpenRouterKey(key: string) {
-    this.openRouterKey = key;
   }
 
   private headers(extra?: Record<string, string>): Record<string, string> {
     return {
       Authorization: `Bearer ${this.apiKey}`,
       "Content-Type": "application/json",
-      ...(this.openRouterKey ? { "X-OpenRouter-Key": this.openRouterKey } : {}),
       ...extra,
     };
+  }
+
+  async redeemStarterCode(code: string): Promise<{ success: boolean; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/api/auth/redeem-code`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ code }),
+    });
+    return res.json() as Promise<{ success: boolean; error?: string }>;
+  }
+
+  async checkAccess(): Promise<boolean> {
+    const res = await fetch(`${this.baseUrl}/api/auth/access-status`, {
+      headers: this.headers(),
+    });
+    const data = await res.json() as { hasAccess: boolean };
+    return data.hasAccess;
   }
 
   private async _request<T>(method: string, path: string, body?: any): Promise<T> {

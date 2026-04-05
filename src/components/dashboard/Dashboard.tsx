@@ -41,11 +41,9 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   const supabase = createClient();
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
-  const openRouterKey = typeof window !== "undefined" ? localStorage.getItem("openrouter_key") : null;
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(openRouterKey ? { "X-OpenRouter-Key": openRouterKey } : {}),
   };
 }
 

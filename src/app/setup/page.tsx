@@ -11,6 +11,9 @@ import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import { createClient } from "@/lib/supabase/client";
 
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL || "https://dreamer-py.onrender.com";
+
 const renaissanceTheme = createTheme({
   palette: {
     mode: "light",
@@ -27,7 +30,7 @@ const renaissanceTheme = createTheme({
 
 export default function SetupPage() {
   const router = useRouter();
-  const [key, setKey] = useState("");
+  const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,11 +47,27 @@ export default function SetupPage() {
     setLoading(true);
 
     try {
-      const res = await fetch("https://openrouter.ai/api/v1/models", {
-        headers: { Authorization: `Bearer ${key}` },
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.push("/login");
+        return;
+      }
+
+      const res = await fetch(`${BACKEND_URL}/api/auth/redeem-code`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ code: code.trim() }),
       });
-      if (!res.ok) throw new Error("Invalid API key. Please check and try again.");
-      localStorage.setItem("openrouter_key", key);
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Invalid starter code. Please check and try again.");
+      }
+
       router.push("/");
     } catch (err: any) {
       setError(err.message || "Validation failed.");
@@ -95,7 +114,7 @@ export default function SetupPage() {
               mb: 4,
             }}
           >
-            Connect your AI models to begin creating
+            Enter your starter code to begin creating
           </Typography>
 
           {/* Card */}
@@ -116,7 +135,7 @@ export default function SetupPage() {
                 mb: 2,
               }}
             >
-              OpenRouter API Key
+              Starter Code
             </Typography>
 
             <Typography
@@ -128,35 +147,8 @@ export default function SetupPage() {
                 mb: 3,
               }}
             >
-              Dreamer uses OpenRouter to connect to AI models. You&apos;ll need an API key to continue.
+              Paste the starter code you received to activate your account and start building.
             </Typography>
-
-            {/* Steps */}
-            <Box sx={{ mb: 3, pl: 1 }}>
-              {[
-                <>Visit <Box component="a" href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" sx={{ color: "#8B6914", fontWeight: 600, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}>openrouter.ai/keys</Box></>,
-                "Create a new API key",
-                "Paste it below",
-              ].map((step, i) => (
-                <Box key={i} sx={{ display: "flex", gap: 1.5, mb: 1.25, alignItems: "flex-start" }}>
-                  <Box
-                    sx={{
-                      width: 22, height: 22, borderRadius: "50%",
-                      border: "1.5px solid #D4C9B5",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      flexShrink: 0, mt: 0.15,
-                    }}
-                  >
-                    <Typography sx={{ fontFamily: '"Cormorant Garamond", serif', fontSize: "0.75rem", fontWeight: 600, color: "#8B6914" }}>
-                      {i + 1}
-                    </Typography>
-                  </Box>
-                  <Typography sx={{ fontFamily: '"Cormorant Garamond", serif', fontSize: "0.9rem", color: "#7A6B55" }}>
-                    {step}
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
 
             {error && (
               <Typography sx={{ color: "#C53030", fontSize: "0.85rem", fontFamily: '"Inter", sans-serif', mb: 2 }}>
@@ -167,12 +159,12 @@ export default function SetupPage() {
             <form onSubmit={handleSubmit}>
               <TextField
                 fullWidth
-                label="API Key"
-                type="password"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
+                label="Starter Code"
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
                 required
                 size="small"
+                placeholder="e.g. DREAM-A7X9-KP2M"
                 sx={{
                   mb: 2.5,
                   "& .MuiOutlinedInput-root": {
@@ -180,6 +172,7 @@ export default function SetupPage() {
                     bgcolor: "#FFFDF7",
                     fontFamily: '"Inter", sans-serif',
                     fontSize: "0.9rem",
+                    letterSpacing: "0.1em",
                   },
                   "& .MuiInputLabel-root": {
                     fontFamily: '"Inter", sans-serif',
@@ -191,7 +184,7 @@ export default function SetupPage() {
                 type="submit"
                 fullWidth
                 variant="contained"
-                disabled={loading || !key.trim()}
+                disabled={loading || !code.trim()}
                 sx={{
                   py: 1.3,
                   borderRadius: 2,
@@ -204,7 +197,7 @@ export default function SetupPage() {
                   "&:hover": { bgcolor: "#3D3220" },
                 }}
               >
-                {loading ? <CircularProgress size={22} color="inherit" /> : "Continue"}
+                {loading ? <CircularProgress size={22} color="inherit" /> : "Activate"}
               </Button>
             </form>
           </Box>
@@ -220,7 +213,7 @@ export default function SetupPage() {
               fontStyle: "italic",
             }}
           >
-            Your key is stored locally and never shared
+            Don&apos;t have a code? Contact your administrator.
           </Typography>
         </Box>
       </Box>
