@@ -5,6 +5,7 @@ import { SandboxInstance } from "@blaxel/core";
 // Images are pre-built with all dependencies via `bl deploy` from sandbox-templates/
 const TEMPLATE_IMAGES: Record<string, string> = {
   nextjs: "nextjs-template:latest",
+  blank: "github-template:latest",
 };
 
 function sandboxName(projectId: string): string {
